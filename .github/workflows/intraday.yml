@@ -1,0 +1,50 @@
+name: 장중 돌파 감시
+
+on:
+  workflow_dispatch:
+    inputs:
+      market:
+        description: '시장'
+        required: true
+        default: 'us'
+        type: choice
+        options: ['us', 'kr']
+      universe:
+        description: '유니버스 크기'
+        required: true
+        default: '1500'
+      top:
+        description: '감시 종목 수'
+        required: true
+        default: '25'
+  schedule:
+    - cron: '0 13 * * 1-5'
+    - cron: '30 23 * * 0-4'
+
+permissions:
+  contents: read
+
+env:
+  MK: ${{ github.event.inputs.market || (github.event.schedule == '0 13 * * 1-5' && 'us' || 'kr') }}
+  UNI: ${{ github.event.inputs.universe || '1500' }}
+  TOP: ${{ github.event.inputs.top || '25' }}
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: 감시 실행
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python intraday.py --market "$MK" --universe "$UNI" --top "$TOP" --interval 5 --max-minutes 330
