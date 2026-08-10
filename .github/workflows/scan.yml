@@ -14,8 +14,8 @@ on:
         required: true
         default: '800'
   schedule:
-    - cron: '30 23 * * 0-4'   # 08:30 KST 월~금 → 국장
-    - cron: '0 12 * * 1-5'    # 21:00 KST 월~금 → 미장 (개장 전)
+    - cron: '30 23 * * 0-4'
+    - cron: '0 12 * * 1-5'
 
 permissions:
   contents: write
@@ -55,19 +55,24 @@ jobs:
       - name: 스캔 실행
         run: |
           mkdir -p results
-          python scan.py --market ${{ steps.mk.outputs.market }} \
-                         --universe ${{ steps.mk.outputs.uni }} \
-            2>&1 | tee results/scan_log.txt
+          python scan.py --market ${{ steps.mk.outputs.market }} --universe ${{ steps.mk.outputs.uni }} 2>&1 | tee results/scan_log.txt
 
       - name: 결과 커밋
         if: always()
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f results/ || true
           git diff --staged --quiet || git commit -m "관심종목 ${{ steps.mk.outputs.market }} $(date +'%Y-%m-%d')"
           git pull --rebase --autostash origin ${{ github.ref_name }} || true
           git push || true
+
+      - name: 아티팩트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchlist-${{ steps.mk.outputs.market }}
+          path: results/
 
       - name: 텔레그램 발송
         if: always()
@@ -78,8 +83,7 @@ jobs:
         run: |
           if [ -z "$TG_TOKEN" ]; then echo "토큰 없음"; exit 0; fi
           send() {
-            curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
-              --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$1" > /dev/null
+            curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$1" > /dev/null
           }
           F="results/watchlist_${MK}.txt"
           if [ -s "$F" ]; then
@@ -87,9 +91,7 @@ jobs:
             for p in /tmp/part_*; do send "$(cat $p)"; sleep 1; done
             echo "발송 완료"
           else
-            TAIL=$(tail -c 1200 results/scan_log.txt 2>/dev/null || echo "로그 없음")
-            send "[${MK}] 후보 0건 또는 실행 실패
-
-$TAIL"
+            TAIL=$(tail -c 1000 results/scan_log.txt 2>/dev/null | tr '\n' ' ' || echo "로그 없음")
+            send "[${MK}] 후보 0건 또는 실행 실패 / ${TAIL}"
             echo "0건 알림 발송"
           fi
