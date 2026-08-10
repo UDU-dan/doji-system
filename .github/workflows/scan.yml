@@ -82,10 +82,14 @@ jobs:
               --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$1" > /dev/null
           }
           F="results/watchlist_${MK}.txt"
-          if [ -f "$F" ]; then
+          if [ -s "$F" ]; then
             split -b 3500 "$F" /tmp/part_
             for p in /tmp/part_*; do send "$(cat $p)"; sleep 1; done
             echo "발송 완료"
           else
-            send "스캔 실패 - 로그 확인"
+            TAIL=$(tail -c 1200 results/scan_log.txt 2>/dev/null || echo "로그 없음")
+            send "[${MK}] 후보 0건 또는 실행 실패
+
+$TAIL"
+            echo "0건 알림 발송"
           fi
