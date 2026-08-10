@@ -23,6 +23,12 @@ MIN_PRICE: 1000
 # ── 돌파 / 리스크 ──
 BREAK_BUFFER: 0.002      # 돌파 여유 0.2%
 STOP_ATR_BUF: 0.15       # 손절 버퍼 (ATR 배수)
-MAX_STOP_PCT: 5.0        # 손절폭 상한 % (초과시 진입 포기)
+MAX_STOP_PCT: 2.0        # 손절폭 상한 % (초과시 진입 포기)
 RISK_PCT: 0.5            # 1회 리스크 (계좌 %)
 TIME_STOP_DAYS: 5        # 시간 손절
+
+# ── 청산 / 비용 (v2) ──
+HALF_EXIT_R: 1.0         # 몇 R에서 절반 익절할지
+MAX_HOLD_DAYS: 30        # 잔여 절반 최대 보유일
+SELL_TAX_PCT: 0.20       # 매도 거래세+농특세 (국장)
+SLIPPAGE_PCT: 0.10       # 편도 슬리피지 가정
