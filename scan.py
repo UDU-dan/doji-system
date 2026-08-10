@@ -36,7 +36,7 @@ S = dict(
     VOL_MIN=1.0,
     DRAGON_LOWER=60.0,
     DRAGON_UPPER=15.0,
-    MAX_STOP_PCT=10.0,
+    MAX_STOP1_PCT=3.0,
     MIN_VALUE_KR=1_000_000_000,
     MIN_VALUE_US=10_000_000,
     MIN_PRICE_KR=1000,
@@ -153,13 +153,17 @@ def evaluate(df, code, name, market, marcap=None):
         return None
 
     entry = H * (1 + 0.002)
-    stop = L - max(A * 0.15, entry * 0.001)
-    risk = entry - stop
-    if risk <= 0:
+    stop1 = C                                   # 타이트: 도지 몸통(종가) 아래
+    stop2 = L - max(A * 0.15, entry * 0.001)    # 여유: 도지 저가 아래
+    risk1, risk2 = entry - stop1, entry - stop2
+    if risk1 <= 0 or risk2 <= 0:
         return None
-    stop_pct = risk / entry * 100
-    if stop_pct > S["MAX_STOP_PCT"]:
+    stop1_pct = risk1 / entry * 100
+    stop2_pct = risk2 / entry * 100
+    if stop1_pct > S["MAX_STOP1_PCT"]:
         return None
+    stop_pct = stop1_pct
+    risk = risk1
 
     sc_vol = min(vol_ratio / 3.0, 1.0) * 100
     sc_qual = max(0.0, 1 - body_r / S["BODY_MAX_PCT"]) * 100
@@ -179,7 +183,7 @@ def evaluate(df, code, name, market, marcap=None):
 
     nearness = C / H52 if H52 > 0 else 0
     sc_52 = float(np.clip((nearness - 0.70) / 0.30, 0, 1) * 100)
-    sc_stop = max(0.0, 1 - stop_pct / S["MAX_STOP_PCT"]) * 100
+    sc_stop = max(0.0, 1 - stop1_pct / S["MAX_STOP1_PCT"]) * 100
     sc_liq = float(np.clip(np.log10(max(VAL20, 1) / min_val) / 1.5, 0, 1) * 100)
 
     score = (S["W_VOLUME"] * sc_vol + S["W_QUALITY"] * sc_qual +
@@ -198,22 +202,20 @@ def evaluate(df, code, name, market, marcap=None):
     combo = S["BONUS_COMBO"] * (len(pats) - 1)
     score = max(0.0, min(100.0, score + combo) - pen_s - pen_t)
 
-    if stop_pct <= S["GRADE_A_STOP"]:
-        grade = "단타A"
-    elif stop_pct <= S["GRADE_B_STOP"]:
-        grade = "단타B"
-    else:
-        grade = "스윙"
-    tgt1 = entry + risk * S["HALF_EXIT_R"]
+    grade = "A" if stop1_pct <= S["GRADE_A_STOP"] else (
+        "B" if stop1_pct <= S["GRADE_B_STOP"] else "C")
+    tgt1 = entry + risk1 * S["HALF_EXIT_R"]
 
     px = (lambda x: int(round(x))) if market == "kr" else (lambda x: round(x, 2))
     return dict(
         grade=grade, tgt1=px(tgt1), atr_pct=round(atr_pct, 2),
         value=(int(VAL20 / 1e8) if market == "kr" else round(VAL20 / 1e6, 1)),
+        stop1=px(stop1), stop1_pct=round(stop1_pct, 2),
+        stop2=px(stop2), stop2_pct=round(stop2_pct, 2),
         code=code, name=name, market=market, date=str(d.index[i])[:10],
         score=round(score, 1), close=px(C),
         entry=px(entry), chase=px(entry * (1 + S["CHASE_PCT"] / 100)),
-        ma20=px(M20), stop=px(stop), stop_pct=round(stop_pct, 2),
+        ma20=px(M20), stop=px(stop1), stop_pct=round(stop1_pct, 2),
         vol_ratio=round(vol_ratio, 2), body_r=round(body_r, 1),
         type="잠자리" if is_dragon else ("표준" if is_doji else "-"),
         pats="+".join(pats), npat=len(pats),
@@ -364,19 +366,20 @@ def fmt(rows, title, brief=False):
         if brief:
             out.append(f"{r['rank']}위 {r['name'][:12]} {r['score']}점 "
                        f"<{r['grade']}> [{r['pats']}] · 진입 {r['entry']:,} · "
-                       f"익절 {r['tgt1']:,} · 손절 {r['stop']:,}(-{r['stop_pct']}%)")
+                       f"익절 {r['tgt1']:,} · 손절 {r['stop1']:,}(-{r['stop1_pct']}%)")
             continue
         ma = (f"MA20 {r['ma20']:,} 돌파시 더 강함" if r["ma20"] > r["entry"]
               else f"MA20 {r['ma20']:,} 이미 위")
         blk = [
             f"\n{r['rank']}위  {r['name'][:20]} ({r['code']})  {r['score']}점  "
-            f"<{r['grade']}> [{r['pats']}]",
+            f"<{r['grade']}등급> [{r['pats']}]",
             f"  종가 {r['close']:,} · 거래량 {r['vol_ratio']}배 · 일변동 {r['atr_pct']}%"
             + (f" · {r['type']}형" if r['type'] != "-" else ""),
             f"  거래대금 {r['value']:,}" + ("억" if r['market'] == "kr" else "M$"),
             f"  진입   {r['entry']:,} ~ {r['chase']:,}",
-            f"  1차익절 {r['tgt1']:,} (+{r['stop_pct']}%) → 절반 정리 후 손절을 진입가로",
-            f"  손절   {r['stop']:,} (-{r['stop_pct']}%)",
+            f"  익절   {r['tgt1']:,} (+{r['stop1_pct']}%) → 절반 정리, 손절을 진입가로",
+            f"  손절①  {r['stop1']:,} (-{r['stop1_pct']}%)  도지 몸통 이탈 = 돌파 실패",
+            f"  손절②  {r['stop2']:,} (-{r['stop2_pct']}%)  도지 저가, 마지노선",
             f"  52주고가 대비 {r['near52']}% · {ma}",
         ]
         if r.get("pen", 0) > 0:
@@ -445,7 +448,7 @@ def main():
         return
 
     df = pd.DataFrame(res)
-    order = {"단타A": 0, "단타B": 1, "스윙": 2}
+    order = {"A": 0, "B": 1, "C": 2}
     df["_g"] = df["grade"].map(order)
     df = df.sort_values(["_g", "score"], ascending=[True, False]).reset_index(drop=True)
     df = df.drop(columns=["_g"])
@@ -477,7 +480,7 @@ def main():
     mix = " · ".join(f"{k} {v}" for k, v in
                      sorted(cnt.items(), key=lambda z: -z[1]))
     gcnt = df["grade"].value_counts().to_dict()
-    gmix = " · ".join(f"{k} {gcnt.get(k, 0)}" for k in ("단타A", "단타B", "스윙"))
+    gmix = " · ".join(f"{k}등급 {gcnt.get(k, 0)}" for k in ("A", "B", "C"))
     head = (f"[{base} 관심종목 · {'국장' if mk == 'kr' else '미장'}]\n"
             f"전체 {len(df)}건 · 최고 {df['score'].max():.1f}점 / "
             f"중앙 {df['score'].median():.1f}점\n"
