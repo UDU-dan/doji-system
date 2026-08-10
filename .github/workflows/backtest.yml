@@ -65,9 +65,9 @@ jobs:
           TG_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          if [ -z "$TG_TOKEN" ]; then echo "텔레그램 미설정"; exit 0; fi
-          MSG=$(tail -c 3200 results/result.txt 2>/dev/null || echo "실행 실패")
-          curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+          if [ -z "$TG_TOKEN" ]; then echo "토큰 없음"; exit 0; fi
+          MSG=$(tail -c 3000 results/result.txt 2>/dev/null || echo "실행 실패")
+          RESP=$(curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
             --data-urlencode "chat_id=$TG_CHAT" \
-            --data-urlencode "text=<pre>$MSG</pre>" \
-            --data-urlencode "parse_mode=HTML" > /dev/null
+            --data-urlencode "text=$MSG")
+          echo "응답: $RESP"
