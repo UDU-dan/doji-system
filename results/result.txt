@@ -1,54 +1,40 @@
 [설정] params.yml 적용됨
-현재 설정: {'BODY_MAX_PCT': 8.0, 'FALL_PCT': 5.0, 'VOL_MULT': 1.2, 'MAX_STOP_PCT': 8.0}
-비용 가정: 매도 거래세 0.2% + 슬리피지 0.1%
+비용: 매도세 0.2% + 슬리피지 0.1% (매도 1회당)
+청산: +1.0R 절반익절 -> 본절이동 -> 직전저점 추적 / 시간손절 5일 / 최대 30일
 
-[1/3] 종목 리스트 (상위 500)...
-      500종목
-[2/3] 일봉 수집 2025-05-11 ~ 2026-08-10...
+[1/4] 종목 500...
+[2/4] 일봉 2023-04-10 ~ 2026-08-10...
       100/500
       200/500
       300/500
       400/500
       500/500
-      수집 499종목
-
-[3/3] 결과
-==============================================================
-
-현재 설정 (몸통8.0% 거래량1.2x 손절폭≤8.0% 하락5.0%)
-  후보 288건 (일평균 1.0)  ->  돌파 진입 144건 (50%)
-  승률 49.3%   건당 순기대값 +0.035R   합계 +5.1R
-  PF 1.07   최대 누적낙폭 13.6R   최대 연속손절 8회
-  평균 손절폭 4.98%   평균 보유 4.6일
-
-==============================================================
-손절폭 분포 (전체 후보)
-  하위 10%    2.55%
-  하위 25%    3.40%
-  하위 50%    4.85%
-  하위 75%    6.90%
-  하위 90%    9.21%
-
-==============================================================
-손절폭 상한별 성과
-  상한   진입    승률    순기대값     합계R     PF
-    2%      6건   33.3%    -0.409R     -2.5R   0.48
-    3%     22건   36.4%    -0.250R     -5.5R   0.59
-    4%     50건   40.0%    -0.142R     -7.1R   0.77
-    5%     73건   49.3%    +0.109R     +8.0R   1.21
-    7%    121건   52.9%    +0.106R    +12.8R   1.22
-   99%    186건   52.2%    +0.112R    +20.8R   1.25
-
-==============================================================
-조합별 순기대값(R) / 진입건수
-             거래량 1.0x        1.2x        1.5x        2.0x
-  몸통  5%   +0.048/197   +0.008/103   -0.107/47    -0.382/12   
-  몸통  8%   -0.002/300   +0.035/144   -0.041/60    -0.253/17    <-현재
-  몸통 10%   -0.025/374   +0.016/178   -0.116/73    -0.268/18   
-  몸통 12%   -0.027/433   -0.023/205   -0.143/85    -0.169/22   
-  몸통 15%   +0.013/546   +0.027/262   -0.062/107   -0.102/28   
-
-  * 진입 10건 미만은 '부족'. 30건 미만이면 숫자를 믿지 마세요.
-  * 순기대값 +0.1R 이상인 조합만 후보로 봅니다.
-
-results/signals.csv · signals_all.csv 저장
+      수집 497종목
+[3/4] 전략별 시뮬레이션...
+/home/runner/work/doji-system/doji-system/backtest.py:160: RuntimeWarning: divide by zero encountered in scalar divide
+  stop_pct = risk / entry * 100
+Traceback (most recent call last):
+  File "/home/runner/work/doji-system/doji-system/backtest.py", line 317, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/runner/work/doji-system/doji-system/backtest.py", line 271, in main
+    mid = df["date"].median()
+          ^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/pandas/util/_decorators.py", line 336, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/pandas/core/series.py", line 8196, in median
+    return NDFrame.median(
+           ^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/pandas/core/generic.py", line 11831, in median
+    return self._stat_function(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/pandas/core/generic.py", line 11773, in _stat_function
+    return self._reduce(
+           ^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/pandas/core/series.py", line 7480, in _reduce
+    result = delegate._reduce(name, skipna=skipna, **kwds)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.15/x64/lib/python3.11/site-packages/pandas/core/arrays/string_.py", line 968, in _reduce
+    raise TypeError(f"Cannot perform reduction '{name}' with string dtype")
+TypeError: Cannot perform reduction 'median' with string dtype
