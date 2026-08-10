@@ -25,10 +25,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
 
-      - name: 패키지 설치
-        run: pip install -r requirements.txt
+      - name: 패키지 설치 (재시도 3회)
+        run: |
+          for i in 1 2 3; do
+            pip install --no-cache-dir -r requirements.txt && break
+            echo "설치 실패, 재시도 $i"
+            sleep 20
+          done
 
       - name: 백테스트 실행
         run: |
@@ -38,7 +42,7 @@ jobs:
             --universe ${{ github.event.inputs.universe }} \
             2>&1 | tee results/result.txt
 
-      - name: 결과를 저장소에 커밋 (폰에서 바로 보기)
+      - name: 결과 커밋
         if: always()
         run: |
           git config user.name  "github-actions[bot]"
@@ -61,10 +65,9 @@ jobs:
           TG_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          if [ -z "$TG_TOKEN" ]; then echo "텔레그램 미설정 - 건너뜀"; exit 0; fi
+          if [ -z "$TG_TOKEN" ]; then echo "텔레그램 미설정"; exit 0; fi
           MSG=$(tail -c 3200 results/result.txt 2>/dev/null || echo "실행 실패")
           curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
             --data-urlencode "chat_id=$TG_CHAT" \
             --data-urlencode "text=<pre>$MSG</pre>" \
             --data-urlencode "parse_mode=HTML" > /dev/null
-          echo "텔레그램 발송 완료"
