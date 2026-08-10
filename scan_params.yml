@@ -7,9 +7,11 @@
 BODY_MAX_PCT: 15.0      # 몸통 최대 비율. 후보 적으면 20까지
 MIN_RANGE_ATR: 0.4      # 최소 캔들범위 (죽은 종목 제외)
 VOL_MIN: 1.0            # 최소 거래량 배수
-MAX_STOP1_PCT: 3.0      # 타이트 손절폭(도지 몸통) 상한 %
+MAX_STOP1_PCT: 3.0      # 손절① 상한 %
+MIN_STOP1_PCT: 1.0      # 손절① 최소폭 %. 너무 좁으면 호가 진동에 걸림
+MAX_SURGE5: 30.0        # 최근 5일 이 % 초과 상승이면 제외
 
-MIN_VALUE_KR: 5000000000    # 국장 거래대금 50억 (단타는 유동성 필수)
+MIN_VALUE_KR: 10000000000   # 국장 거래대금 100억 (단타는 유동성 필수)
 MIN_VALUE_US: 30000000      # 미장 거래대금 $30M
 MIN_PRICE_KR: 1000
 MIN_PRICE_US: 5
@@ -29,8 +31,8 @@ W_STOP: 25              # 손절폭 좁을수록 가점 (단타는 이게 핵심
 W_LIQUIDITY: 8          # 거래대금
 
 # ── 감점 (단기반전 회피) ──
-PEN_SURGE: 15           # 최근 5일 급등 감점 최대치
-SURGE_PCT: 15.0         # 5일 수익률이 이 이상이면 감점 시작
+PEN_SURGE: 30           # 최근 5일 급등 감점 최대치
+SURGE_PCT: 10.0         # 5일 수익률이 이 이상이면 감점 시작
 PEN_TURNOVER: 10        # 회전율 과열 감점 최대치
 TURNOVER_HOT: 0.05      # 일거래대금/시총 이 이상이면 과열
 
@@ -41,8 +43,8 @@ VOL_SURGE: 3.0         # 거래량 급증 기준 배수
 BONUS_COMBO: 5         # 유형 하나 겹칠 때마다 가점
 
 # ── 단타 등급 ──
-GRADE_A_STOP: 1.0      # 타이트 손절폭 이 이하 = A등급
-GRADE_B_STOP: 2.0      # 이 이하 = B등급 / 초과 = C등급
+GRADE_A_STOP: 1.5      # 손절① 이 이하 = A등급
+GRADE_B_STOP: 2.2      # 이 이하 = B등급 / 초과 = C등급
 HALF_EXIT_R: 1.0       # 익절 = 타이트 손절폭의 몇 배
 
 # ── 단타 적합성 ──
