@@ -37,6 +37,8 @@ S = dict(
     DRAGON_LOWER=60.0,
     DRAGON_UPPER=15.0,
     MAX_STOP1_PCT=3.0,
+    MIN_STOP1_PCT=1.0,   # 손절① 최소폭. 너무 좁으면 노이즈에 걸림
+    MAX_SURGE5=30.0,     # 최근 5일 이 % 초과 상승이면 아예 제외
     MIN_VALUE_KR=1_000_000_000,
     MIN_VALUE_US=10_000_000,
     MIN_PRICE_KR=1000,
@@ -122,6 +124,10 @@ def evaluate(df, code, name, market, marcap=None):
     if vol_ratio < S["VOL_MIN"]:
         return None
 
+    ret5_pre = (C / float(c.iloc[-6]) - 1) * 100 if len(c) > 6 else 0.0
+    if ret5_pre > S["MAX_SURGE5"]:
+        return None                       # 단기 급등 과열 - 되돌림 위험
+
     atr_pct = A / C * 100
     if atr_pct < S["MIN_ATR_PCT"]:
         return None                       # 하루 변동폭이 작으면 단타로 먹을 게 없음
@@ -153,7 +159,7 @@ def evaluate(df, code, name, market, marcap=None):
         return None
 
     entry = H * (1 + 0.002)
-    stop1 = C                                   # 타이트: 도지 몸통(종가) 아래
+    stop1 = min(C, entry * (1 - S["MIN_STOP1_PCT"] / 100))   # 도지 종가, 단 최소폭 확보
     stop2 = L - max(A * 0.15, entry * 0.001)    # 여유: 도지 저가 아래
     risk1, risk2 = entry - stop1, entry - stop2
     if risk1 <= 0 or risk2 <= 0:
