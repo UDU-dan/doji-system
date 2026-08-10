@@ -60,6 +60,12 @@ S = dict(
     PULLBACK_PCT=2.0,    # MA20 터치 허용 오차 %
     VOL_SURGE=3.0,       # 거래량 급증 기준 배수
     BONUS_COMBO=5,       # 유형 하나 겹칠 때마다 가점
+    # ── 단타 등급 ──
+    GRADE_A_STOP=1.5,    # 이 이하 손절폭 = 단타A
+    GRADE_B_STOP=2.0,    # 이 이하 = 단타B, 초과는 스윙
+    HALF_EXIT_R=1.0,     # 1차 익절 (손절폭의 몇 배)
+    MIN_ATR_PCT=1.5,     # 일 변동성 하한 (너무 얌전하면 제외)
+    DOWNTREND_GAP=-5.0,  # 종가가 MA20 대비 이 % 아래면 제외
 )
 
 _PF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scan_params.yml")
@@ -115,6 +121,12 @@ def evaluate(df, code, name, market, marcap=None):
 
     if vol_ratio < S["VOL_MIN"]:
         return None
+
+    atr_pct = A / C * 100
+    if atr_pct < S["MIN_ATR_PCT"]:
+        return None                       # 하루 변동폭이 작으면 단타로 먹을 게 없음
+    if (C - float(ma20.iloc[-1])) / float(ma20.iloc[-1]) * 100 < S["DOWNTREND_GAP"]:
+        return None                       # MA20 크게 아래 = 하락추세
 
     # ── 패턴 판정 (하나 이상 만족해야 후보) ──
     is_grave = up_r >= S["DRAGON_LOWER"] and dn_r <= S["DRAGON_UPPER"]
@@ -186,8 +198,18 @@ def evaluate(df, code, name, market, marcap=None):
     combo = S["BONUS_COMBO"] * (len(pats) - 1)
     score = max(0.0, min(100.0, score + combo) - pen_s - pen_t)
 
+    if stop_pct <= S["GRADE_A_STOP"]:
+        grade = "단타A"
+    elif stop_pct <= S["GRADE_B_STOP"]:
+        grade = "단타B"
+    else:
+        grade = "스윙"
+    tgt1 = entry + risk * S["HALF_EXIT_R"]
+
     px = (lambda x: int(round(x))) if market == "kr" else (lambda x: round(x, 2))
     return dict(
+        grade=grade, tgt1=px(tgt1), atr_pct=round(atr_pct, 2),
+        value=(int(VAL20 / 1e8) if market == "kr" else round(VAL20 / 1e6, 1)),
         code=code, name=name, market=market, date=str(d.index[i])[:10],
         score=round(score, 1), close=px(C),
         entry=px(entry), chase=px(entry * (1 + S["CHASE_PCT"] / 100)),
@@ -340,17 +362,21 @@ def fmt(rows, title, brief=False):
     out = [title]
     for r in rows:
         if brief:
-            out.append(f"{r['rank']}위 {r['name'][:12]} {r['score']}점 [{r['pats']}] · "
-                       f"진입 {r['entry']:,} · 손절 {r['stop']:,}(-{r['stop_pct']}%)")
+            out.append(f"{r['rank']}위 {r['name'][:12]} {r['score']}점 "
+                       f"<{r['grade']}> [{r['pats']}] · 진입 {r['entry']:,} · "
+                       f"익절 {r['tgt1']:,} · 손절 {r['stop']:,}(-{r['stop_pct']}%)")
             continue
         ma = (f"MA20 {r['ma20']:,} 돌파시 더 강함" if r["ma20"] > r["entry"]
               else f"MA20 {r['ma20']:,} 이미 위")
         blk = [
-            f"\n{r['rank']}위  {r['name'][:20]} ({r['code']})  {r['score']}점  [{r['pats']}]",
-            f"  종가 {r['close']:,} · 거래량 {r['vol_ratio']}배"
+            f"\n{r['rank']}위  {r['name'][:20]} ({r['code']})  {r['score']}점  "
+            f"<{r['grade']}> [{r['pats']}]",
+            f"  종가 {r['close']:,} · 거래량 {r['vol_ratio']}배 · 일변동 {r['atr_pct']}%"
             + (f" · {r['type']}형" if r['type'] != "-" else ""),
-            f"  진입  {r['entry']:,} ~ {r['chase']:,}",
-            f"  손절  {r['stop']:,} (-{r['stop_pct']}%)",
+            f"  거래대금 {r['value']:,}" + ("억" if r['market'] == "kr" else "M$"),
+            f"  진입   {r['entry']:,} ~ {r['chase']:,}",
+            f"  1차익절 {r['tgt1']:,} (+{r['stop_pct']}%) → 절반 정리 후 손절을 진입가로",
+            f"  손절   {r['stop']:,} (-{r['stop_pct']}%)",
             f"  52주고가 대비 {r['near52']}% · {ma}",
         ]
         if r.get("pen", 0) > 0:
@@ -418,7 +444,11 @@ def main():
         print("후보 0건. scan_params.yml 의 BODY_MAX_PCT 를 올려보세요.")
         return
 
-    df = pd.DataFrame(res).sort_values("score", ascending=False).reset_index(drop=True)
+    df = pd.DataFrame(res)
+    order = {"단타A": 0, "단타B": 1, "스윙": 2}
+    df["_g"] = df["grade"].map(order)
+    df = df.sort_values(["_g", "score"], ascending=[True, False]).reset_index(drop=True)
+    df = df.drop(columns=["_g"])
     df["rank"] = range(1, len(df) + 1)
     os.makedirs("results", exist_ok=True)
     df.to_csv(f"results/watchlist_{mk}.csv", index=False, encoding="utf-8-sig")
@@ -446,9 +476,12 @@ def main():
             cnt[x] = cnt.get(x, 0) + 1
     mix = " · ".join(f"{k} {v}" for k, v in
                      sorted(cnt.items(), key=lambda z: -z[1]))
+    gcnt = df["grade"].value_counts().to_dict()
+    gmix = " · ".join(f"{k} {gcnt.get(k, 0)}" for k in ("단타A", "단타B", "스윙"))
     head = (f"[{base} 관심종목 · {'국장' if mk == 'kr' else '미장'}]\n"
             f"전체 {len(df)}건 · 최고 {df['score'].max():.1f}점 / "
             f"중앙 {df['score'].median():.1f}점\n"
+            f"등급: {gmix}\n"
             f"유형: {mix}\n"
             f"시장국면: {regime}")
 
