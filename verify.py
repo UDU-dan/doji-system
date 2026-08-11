@@ -169,10 +169,12 @@ def analyze(df, code, name, market, days, marcap=None):
             continue
 
         pO, pC = A[i - 1, 0], A[i - 1, 3]
-        stop1 = max(pO, pC)
+        body_top = max(pO, pC)
 
         for pname, lvl, extra in cands:
             entry = lvl * 1.002
+            # 손절 = 직전캔들 몸통 위쪽, 단 최소폭 확보
+            stop1 = min(body_top, entry * (1 - S["MIN_STOP1_PCT"] / 100))
             if stop1 >= entry:
                 continue
             risk = entry - stop1
@@ -222,6 +224,21 @@ def analyze(df, code, name, market, days, marcap=None):
                 last=px(A[-1, 3]),
             ))
     return out
+
+
+def merge_dup(x):
+    """같은 종목·같은 날 여러 패턴 -> 진입가 낮은 것 기준으로 통합"""
+    if len(x) == 0:
+        return x
+
+    def _m(g):
+        g = g.sort_values("entry")
+        b = g.iloc[0].copy()
+        b["pattern"] = " + ".join(dict.fromkeys(g["pattern"]))
+        return b
+
+    return (x.groupby(["code", "date"], group_keys=True)
+             .apply(_m, include_groups=False).reset_index())
 
 
 def report(df, mk, days):
@@ -284,7 +301,7 @@ def report(df, mk, days):
     L.append("━━ 대기 중 (감시 대상) ━━")
     if len(wait) == 0:
         L.append("없음")
-    for _, r in wait.sort_values(["dback", "stop_pct"]).head(12).iterrows():
+    for _, r in merge_dup(wait).sort_values(["dback", "stop_pct"]).head(12).iterrows():
         L.append(f"\n{r['name'][:18]} ({r['code']})  [{r['pattern']}]")
         L.append(f"  신호 {r['date']} ({r['dback']}거래일 전) · "
                  f"거래대금 {r['value']}{'억' if mk=='kr' else 'M$'}")
@@ -295,7 +312,7 @@ def report(df, mk, days):
     if len(brk):
         L.append("")
         L.append("━━ 이미 돌파 (당일 성과순) ━━")
-        for _, r in brk.sort_values("d0_hi", ascending=False).head(10).iterrows():
+        for _, r in merge_dup(brk).sort_values("d0_hi", ascending=False).head(10).iterrows():
             L.append(f"\n{r['name'][:16]} [{r['pattern']}] {r['date']}")
             L.append(f"  {r['days_to']}일 후 돌파 (진입 {r['entry']:,}) · "
                      f"당일 최고 {r['d0_hi']:+.2f}% / 종가 {r['d0_cl']:+.2f}%")
