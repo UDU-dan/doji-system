@@ -32,7 +32,9 @@ S = SC.S
 # 패턴 파라미터
 SWING_N = 5          # 좌우 이 일수보다 높으면 스윙 고점
 PROMINENCE = 2.0     # 봉우리가 주변 저점보다 이 % 이상 튀어나와야 인정
-LOOKBACK = 250       # 저항선 탐색 기간 (약 1년)
+LOOKBACK = 120       # 저항선 탐색 기간 (약 6개월)
+SHOULDER_MIN = 85.0  # 삼봉: 어깨가 머리의 이 % 이상이어야 인정
+SHOULDER_MAX = 98.0  # 어깨가 머리의 이 % 이하 (가운데가 확실히 높아야)
 CLUSTER_PCT = 1.5    # 이 % 안이면 같은 저항선
 MIN_GAP = 15         # 고점 간 최소 간격(거래일)
 MIN_TOUCH = 2        # 최소 터치 횟수
@@ -97,16 +99,25 @@ def find_resistances(peaks, price):
                 used[b] = True
         if len(grp) >= MIN_TOUCH:
             lvl = float(np.mean(grp))
+            # 그룹 내 모든 고점이 평균 대비 오차 안에 있어야 함
+            if max(abs(x - lvl) / lvl * 100 for x in grp) > CLUSTER_PCT:
+                continue
             if price < lvl <= price * (1 + RES_NEAR / 100):
                 res.append((lvl, len(grp), "다중저항", list(gidx)))
 
     # 삼봉: 연속 3개 중 가운데가 최고
     for k in range(len(peaks) - 2):
         p1, p2, p3 = peaks[k][1], peaks[k + 1][1], peaks[k + 2][1]
-        if p2 > p1 and p2 > p3:
-            if price < p2 <= price * (1 + RES_NEAR / 100):
-                res.append((float(p2), 3, "삼봉",
-                            [peaks[k][0], peaks[k + 1][0], peaks[k + 2][0]]))
+        if p2 <= p1 or p2 <= p3:
+            continue
+        r1, r3 = p1 / p2 * 100, p3 / p2 * 100
+        if not (SHOULDER_MIN <= r1 <= SHOULDER_MAX):
+            continue
+        if not (SHOULDER_MIN <= r3 <= SHOULDER_MAX):
+            continue
+        if price < p2 <= price * (1 + RES_NEAR / 100):
+            res.append((float(p2), 3, "삼봉",
+                        [peaks[k][0], peaks[k + 1][0], peaks[k + 2][0]]))
     return res
 
 
