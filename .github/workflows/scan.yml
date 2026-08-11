@@ -1,4 +1,4 @@
-name: 도지 관심종목 스캔
+name: 관심종목 스캔
 
 on:
   workflow_dispatch:
@@ -15,19 +15,19 @@ on:
         default: '800'
   schedule:
     - cron: '30 23 * * 0-4'
-    - cron: '0 12 * * 1-5'
+    - cron: '0 13 * * 1-5'
 
 permissions:
-  contents: write
+  contents: read
 
 env:
-  MK: ${{ github.event.inputs.market || 'kr' }}
-  UNI: ${{ github.event.inputs.universe || '800' }}
+  MK: ${{ github.event.inputs.market || (github.event.schedule == '0 13 * * 1-5' && 'us' || 'kr') }}
+  UNI: ${{ github.event.inputs.universe || (github.event.schedule == '0 13 * * 1-5' && '1500' || '800') }}
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -41,20 +41,17 @@ jobs:
       - name: 스캔 실행
         run: mkdir -p results && python scan.py --market "$MK" --universe "$UNI" 2>&1 | tee results/scan_log.txt
 
-      - name: 결과 커밋
-        if: always()
-        run: bash commit_results.sh "${{ github.ref_name }}"
-
       - name: 아티팩트 업로드
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: watchlist
+          name: watchlist-${{ github.run_id }}
           path: results/
+          retention-days: 3
 
       - name: 텔레그램 발송
         if: always()
         env:
           TG_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: bash notify.sh "$MK"
+        run: bash notify.sh "$MK" watchlist
