@@ -62,6 +62,7 @@ S = dict(
     PULLBACK_PCT=2.0,    # MA20 터치 허용 오차 %
     VOL_SURGE=3.0,       # 거래량 급증 기준 배수
     BONUS_COMBO=5,       # 유형 하나 겹칠 때마다 가점
+    EXCLUDE_BIO=True,    # 국장 바이오·제약 제외
     # ── 단타 등급 ──
     GRADE_A_STOP=1.5,    # 이 이하 손절폭 = 단타A
     GRADE_B_STOP=2.0,    # 이 이하 = 단타B, 초과는 스윙
@@ -245,6 +246,18 @@ def universe_kr(n):
     if nc:
         df = df[~df[nc].astype(str).str.contains("스팩|리츠|ETN", na=False)]
         df = df[~df[nc].astype(str).str.endswith(("우", "우B", "우C"))]
+
+    # 바이오·제약 제외 (변동성 과대 · 단타 부적합)
+    if S.get("EXCLUDE_BIO", True):
+        BIO = ("바이오|제약|파마|팜|생명과학|테라퓨틱스|메디|백신|헬스케어|"
+               "신약|셀|진단|의약|바이오로직스|바이오사이언스")
+        sec = next((x for x in df.columns
+                    if x.lower() in ("sector", "industry", "industrycode")), None)
+        if sec:
+            df = df[~df[sec].astype(str).str.contains(BIO, na=False)]
+        if nc:
+            df = df[~df[nc].astype(str).str.contains(BIO, na=False)]
+
     if mc:
         df = df.sort_values(mc, ascending=False)
     df = df.head(n)
