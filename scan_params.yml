@@ -1,55 +1,55 @@
 # ══════════════════════════════════════════════
-#  스캐너 파라미터 — 이 파일만 고치면 됩니다
+#  스캐너 파라미터 — 폰에서 이 파일만 고치면 됩니다
+#  GitHub 앱 -> 코드 -> scan_params.yml -> 연필 -> 수정 -> 커밋
 # ══════════════════════════════════════════════
 
 # ── 후보 조건 ──
 BODY_MAX_PCT: 8.0        # 몸통이 전체 범위의 몇 % 이하면 도지
-MIN_RANGE_ATR: 0.4       # 최소 캔들범위 (죽은 종목 제외)
-VOL_MIN: 1.0             # 최소 거래량 배수
-MAX_STOP1_PCT: 3.0       # 손절① 상한 %
-MIN_STOP1_PCT: 1.0       # 손절① 최소폭 %
-MAX_SURGE5: 30.0         # 최근 5일 이 % 초과 상승이면 제외
+MIN_RANGE_ATR: 0.4      # 최소 캔들범위 (죽은 종목 제외)
+VOL_MIN: 1.0            # 최소 거래량 배수
+MAX_STOP1_PCT: 3.0      # 손절① 상한 %
+MIN_STOP1_PCT: 1.0      # 손절① 최소폭 %. 너무 좁으면 호가 진동에 걸림
+MAX_SURGE5: 30.0        # 최근 5일 이 % 초과 상승이면 제외
 
-MIN_VALUE_KR: 10000000000   # 국장 거래대금 100억
+MIN_VALUE_KR: 10000000000   # 국장 거래대금 100억 (단타는 유동성 필수)
 MIN_VALUE_US: 30000000      # 미장 거래대금 $30M
 MIN_PRICE_KR: 1000
 MIN_PRICE_US: 5
 
 # ── 출력 ──
-TOP_A: 10                # A그룹 (상세)
-TOP_B: 10                # B그룹 (한 줄)
-CHASE_PCT: 0.5           # 진입 허용 구간 %
-NEWS_PER_STOCK: 2        # 종목당 뉴스 개수
+TOP_A: 10               # A그룹 (상세)
+TOP_B: 10               # B그룹 (한 줄)
+CHASE_PCT: 0.5          # 진입 허용 구간 (돌파가 대비 %)
+NEWS_PER_STOCK: 2       # 종목당 뉴스 개수
 
 # ── 점수 가중치 (합계 100 유지) ──
-W_VOLUME: 25             # 거래량 배수
-W_QUALITY: 15            # 도지 품질
-W_52WH: 12               # 52주 고가 근접도
-W_POSITION: 15           # MA20 근접 · 20일저점 · MA60 위
-W_STOP: 25               # 손절폭 좁을수록 가점
-W_LIQUIDITY: 8           # 거래대금
+W_VOLUME: 25            # 거래량 배수
+W_QUALITY: 15           # 도지 품질 (몸통 얇기 + 잠자리형)
+W_52WH: 12              # 52주 고가 근접도 (George-Hwang 2004)
+W_POSITION: 15          # MA20 근접 · 20일저점 · MA60 위
+W_STOP: 25              # 손절폭 좁을수록 가점 (단타는 이게 핵심)
+W_LIQUIDITY: 8          # 거래대금
 
 # ── 감점 (단기반전 회피) ──
-PEN_SURGE: 30            # 최근 5일 급등 감점 최대치
-SURGE_PCT: 10.0          # 5일 수익률 이 이상이면 감점 시작
-PEN_TURNOVER: 10         # 회전율 과열 감점 최대치
-TURNOVER_HOT: 0.05       # 일거래대금/시총 이 이상이면 과열
-
-# ── 도지 유형 ──
-DRAGON_LOWER: 60.0       # 잠자리형 아래꼬리 최소 %
-DRAGON_UPPER: 15.0       # 잠자리형 위꼬리 최대 %
+PEN_SURGE: 30           # 최근 5일 급등 감점 최대치
+SURGE_PCT: 10.0         # 5일 수익률이 이 이상이면 감점 시작
+PEN_TURNOVER: 10        # 회전율 과열 감점 최대치
+TURNOVER_HOT: 0.05      # 일거래대금/시총 이 이상이면 과열
 
 # ── 패턴 유형 판정 ──
-NEAR52_PCT: 1.0          # 52주 고가 대비 이 % 이내면 신고가권
-PULLBACK_PCT: 2.0        # MA20 터치 허용 오차 %
-VOL_SURGE: 3.0           # 거래량 급증 기준 배수
-BONUS_COMBO: 5           # 유형 하나 겹칠 때마다 가점
+NEAR52_PCT: 1.0        # 52주 고가 대비 이 % 이내면 신고가권
+PULLBACK_PCT: 2.0      # MA20 터치 허용 오차 %
+VOL_SURGE: 3.0         # 거래량 급증 기준 배수
+BONUS_COMBO: 5         # 유형 하나 겹칠 때마다 가점
 
 # ── 단타 등급 ──
-GRADE_A_STOP: 1.5        # 손절① 이 이하 = A등급
-GRADE_B_STOP: 2.2        # 이 이하 = B등급 / 초과 = C등급
-HALF_EXIT_R: 1.0         # 익절 = 손절폭의 몇 배
+GRADE_A_STOP: 1.5      # 손절① 이 이하 = A등급
+GRADE_B_STOP: 2.2      # 이 이하 = B등급 / 초과 = C등급
+HALF_EXIT_R: 1.0       # 익절 = 타이트 손절폭의 몇 배
 
 # ── 단타 적합성 ──
-MIN_ATR_PCT: 1.5         # 일 변동성 하한 %
-DOWNTREND_GAP: -5.0      # 종가가 MA20 대비 이 % 아래면 제외
+MIN_ATR_PCT: 1.5       # 일 변동성 하한 %. 너무 얌전하면 뚫려도 안 감
+DOWNTREND_GAP: -5.0    # 종가가 MA20 대비 이 % 아래면 제외 (하락추세)
+
+# ── 제외 설정 ──
+EXCLUDE_BIO: true        # 국장 바이오·제약 제외 (변동성 과대)
