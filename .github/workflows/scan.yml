@@ -9,6 +9,10 @@ on:
         default: 'kr'
         type: choice
         options: ['kr', 'us']
+      days:
+        description: '최근 며칠 신호까지'
+        required: true
+        default: '5'
       universe:
         description: '대상 종목 수'
         required: true
@@ -22,12 +26,13 @@ permissions:
 
 env:
   MK: ${{ github.event.inputs.market || (github.event.schedule == '0 13 * * 1-5' && 'us' || 'kr') }}
+  DAYS: ${{ github.event.inputs.days || '5' }}
   UNI: ${{ github.event.inputs.universe || (github.event.schedule == '0 13 * * 1-5' && '1500' || '800') }}
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +44,7 @@ jobs:
         run: pip install --no-cache-dir -r requirements.txt
 
       - name: 스캔 실행
-        run: mkdir -p results && python scan.py --market "$MK" --universe "$UNI" 2>&1 | tee results/scan_log.txt
+        run: mkdir -p results && python daily.py --market "$MK" --days "$DAYS" --universe "$UNI" 2>&1 | tee results/scan_log.txt
 
       - name: 아티팩트 업로드
         if: always()
