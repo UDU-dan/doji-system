@@ -111,7 +111,11 @@ def analyze(df, code, name, market, days, marcap=None):
             continue
 
         entry = H * 1.002
-        stop1 = min(C, entry * (1 - S["MIN_STOP1_PCT"] / 100))
+        # 손절 = 도지 직전 캔들 몸통의 위쪽 끝 (양봉이면 종가, 음봉이면 시가)
+        pO, pC = A[i - 1, 0], A[i - 1, 3]
+        stop1 = max(pO, pC)
+        if stop1 >= entry:                     # 직전 몸통이 도지 위 -> 무효
+            continue
         stop2 = L - max(av * 0.15, entry * 0.001)
         risk = entry - stop1
         if risk <= 0:
@@ -130,17 +134,16 @@ def analyze(df, code, name, market, days, marcap=None):
             if A[j, 1] >= entry:                  # 돌파
                 status = "돌파"
                 brk_day = j - i
-                fwd = A[j:n, 1]
-                mx = float(fwd.max())
-                # 돌파 후 손절 먼저인지 확인
-                hit_stop = False
+                mx = float(A[j:n, 1].max())
+                # 종가 기준 판정: 장중 스침은 무시
+                res = "보유중"
                 for k in range(j, n):
-                    if A[k, 2] <= stop1:
-                        hit_stop = True
+                    if A[k, 1] >= entry + risk:    # 목표 도달
+                        res = "+1R달성"
                         break
-                    if A[k, 1] >= entry + risk:
+                    if A[k, 3] <= stop1:           # 종가가 손절선 아래
+                        res = "손절"
                         break
-                res = "손절" if hit_stop else ("+1R달성" if mx >= entry + risk else "보유중")
                 break
 
         px = (lambda x: int(round(x))) if market == "kr" else (lambda x: round(x, 2))
@@ -237,6 +240,22 @@ def main():
                      f"+1R 달성 {(dj_brk['result']=='+1R달성').sum()}건")
         kc = dj["kind"].value_counts().to_dict()
         L.append("  유형: " + " · ".join(f"{k} {v}" for k, v in kc.items()))
+
+    if len(brk):
+        import numpy as _np
+        L.append("")
+        L.append("━━ 손절폭 분포 (직전캔들 몸통 기준) ━━")
+        sp = df["stop_pct"].values
+        L.append(f"  중앙 {_np.median(sp):.2f}% · "
+                 f"하위25% {_np.percentile(sp, 25):.2f}% · "
+                 f"상위75% {_np.percentile(sp, 75):.2f}%")
+        L.append("")
+        L.append("━━ 목표 도달률 (돌파분 기준) ━━")
+        L.append("  목표    도달")
+        for cap in (1.0, 1.5, 2.0, 3.0, 5.0):
+            g = brk["gain"].dropna()
+            hit = (g >= cap).sum()
+            L.append(f"  +{cap:3.1f}%   {hit:3d}/{len(g)}건 ({hit/max(len(g),1)*100:3.0f}%)")
 
     L.append("")
     L.append("━━ 아직 대기 중 (감시 대상) ━━")
