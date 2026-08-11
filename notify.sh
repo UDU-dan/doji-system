@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 텔레그램 발송 스크립트. 워크플로에서 호출한다.
-# 사용: bash notify.sh kr
+# 텔레그램 발송. 사용: bash notify.sh <market> <prefix>
 set -u
 MK="${1:-kr}"
+PREFIX="${2:-watchlist}"
 
 if [ -z "${TG_TOKEN:-}" ]; then
   echo "토큰 없음 - 건너뜀"
@@ -15,7 +15,7 @@ send() {
     --data-urlencode "text=$1" > /dev/null
 }
 
-F="results/watchlist_${MK}.txt"
+F="results/${PREFIX}_${MK}.txt"
 
 if [ -s "$F" ]; then
   split -b 3500 "$F" /tmp/part_
@@ -23,10 +23,12 @@ if [ -s "$F" ]; then
     send "$(cat "$p")"
     sleep 1
   done
+  rm -f /tmp/part_*
   echo "발송 완료"
 else
-  TAIL=$(tail -c 1000 "results/scan_log.txt" 2>/dev/null | tr '\n' ' ')
+  LOG=$(ls results/*_log.txt 2>/dev/null | head -1)
+  TAIL=$(tail -c 900 "$LOG" 2>/dev/null | tr '\n' ' ')
   [ -z "$TAIL" ] && TAIL="로그 없음"
-  send "[${MK}] 후보 0건 또는 실행 실패 / ${TAIL}"
+  send "[${MK}] 결과 0건 또는 실행 실패 / ${TAIL}"
   echo "0건 알림 발송"
 fi
