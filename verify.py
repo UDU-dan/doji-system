@@ -1,21 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-최근 N일 도지 검증 스캐너
+패턴 검증 스캐너 (일봉 기준 당일 단타)
 
-지난 N일 안에 발생한 도지/패턴을 모두 찾아서
-  · 아직 도지 고가를 안 넘은 것 -> 감시 대상
-  · 이미 넘은 것 -> 그 후 어떻게 됐는지 성과 집계
-를 함께 보여준다.
+최근 N일 안에 발생한 진입 후보를 모두 찾아서
+  · 아직 저항선을 안 넘은 것 -> 감시 대상
+  · 이미 넘은 것 -> 당일 성과 중심으로 집계
 
-"도지 고가를 넘으면 오른다"가 실제로 맞는지 데이터로 확인하는 용도.
+패턴
+  도지        도지 캔들의 고가가 저항선
+  삼봉        봉우리 3개 중 가운데가 가장 높을 때, 그 고점이 저항선
+  다중저항    1년 내 비슷한 가격에서 2회 이상 막힌 가격대
 
-실행:
-  python verify.py --market kr --days 5 --universe 800
+손절  = 진입 신호 캔들의 직전 캔들 몸통 위쪽 (양봉=종가 / 음봉=시가)
+익절  = 손절폭만큼 위 (1R)
+
+실행: python verify.py --market kr --days 60 --universe 800
 """
 import argparse
 import os
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
@@ -26,31 +29,90 @@ import scan as SC
 
 S = SC.S
 
+# 패턴 파라미터
+SWING_N = 5          # 좌우 이 일수보다 높으면 스윙 고점
+PROMINENCE = 2.0     # 봉우리가 주변 저점보다 이 % 이상 튀어나와야 인정
+LOOKBACK = 250       # 저항선 탐색 기간 (약 1년)
+CLUSTER_PCT = 1.5    # 이 % 안이면 같은 저항선
+MIN_GAP = 15         # 고점 간 최소 간격(거래일)
+MIN_TOUCH = 2        # 최소 터치 횟수
+RES_NEAR = 3.0       # 현재가가 저항선 이 % 아래일 때만 후보
+
 
 def doji_kind(body_r, up_r, dn_r, rng_atr=1.0):
-    """도지면 유형 문자열, 아니면 None. 비석형은 제외 대상이라 'grave' 반환."""
     if body_r > S["BODY_MAX_PCT"]:
         return None
     if dn_r >= S["DRAGON_LOWER"] and up_r <= S["DRAGON_UPPER"]:
         return "잠자리"
     if up_r >= S["DRAGON_LOWER"] and dn_r <= S["DRAGON_UPPER"]:
         return "grave"
-    # 위·아래 균형형: 범위가 평소(ATR)보다 크게 벌어졌으면 롱레그
-    if rng_atr >= 1.5:
-        return "롱레그"
-    return "십자"
+    return "롱레그" if rng_atr >= 1.5 else "십자"
+
+
+def swing_highs(highs, upto, n=SWING_N, lookback=LOOKBACK):
+    """upto 인덱스까지의 스윙 고점 [(idx, price), ...]"""
+    out = []
+    start = max(n, upto - lookback)
+    for k in range(start, upto - n + 1):
+        w = highs[k - n:k + n + 1]
+        if len(w) < 2 * n + 1:
+            continue
+        # 엄격 판정: 양옆보다 확실히 높고, 주변 대비 충분히 돌출돼야 함
+        if not (highs[k] == w.max() and highs[k] > highs[k - n] and highs[k] > highs[k + n]):
+            continue
+        if w.min() <= 0 or (highs[k] / w.min() - 1) * 100 < PROMINENCE:
+            continue
+        if True:
+            if out and k - out[-1][0] < MIN_GAP:
+                if highs[k] > out[-1][1]:
+                    out[-1] = (k, float(highs[k]))
+                continue
+            out.append((k, float(highs[k])))
+    return out
+
+
+def find_resistances(peaks, price):
+    """(저항가, 터치수, 종류) 목록. 현재가 위쪽 저항만."""
+    res = []
+    if len(peaks) < 2:
+        return res
+
+    # 다중 저항: 비슷한 가격끼리 묶기
+    used = [False] * len(peaks)
+    for a in range(len(peaks)):
+        if used[a]:
+            continue
+        grp = [peaks[a][1]]
+        used[a] = True
+        for b in range(a + 1, len(peaks)):
+            if used[b]:
+                continue
+            if abs(peaks[b][1] - peaks[a][1]) / peaks[a][1] * 100 <= CLUSTER_PCT:
+                grp.append(peaks[b][1])
+                used[b] = True
+        if len(grp) >= MIN_TOUCH:
+            lvl = float(np.mean(grp))
+            if price < lvl <= price * (1 + RES_NEAR / 100):
+                res.append((lvl, len(grp), "다중저항"))
+
+    # 삼봉: 연속 3개 중 가운데가 최고
+    for k in range(len(peaks) - 2):
+        p1, p2, p3 = peaks[k][1], peaks[k + 1][1], peaks[k + 2][1]
+        if p2 > p1 and p2 > p3:
+            if price < p2 <= price * (1 + RES_NEAR / 100):
+                res.append((float(p2), 3, "삼봉"))
+    return res
 
 
 def analyze(df, code, name, market, days, marcap=None):
-    """최근 days 봉 각각을 후보로 판정하고, 이후 결과까지 추적."""
-    if df is None or len(df) < 80:
+    if df is None or len(df) < 140:
         return []
     d = df.copy()
     d.columns = [str(x).capitalize() for x in d.columns]
     if not {"Open", "High", "Low", "Close", "Volume"}.issubset(d.columns):
         return []
     d = d.dropna(subset=["Open", "High", "Low", "Close"])
-    if len(d) < 80:
+    if len(d) < 140:
         return []
 
     o, h, l, c, v = d["Open"], d["High"], d["Low"], d["Close"], d["Volume"]
@@ -58,8 +120,6 @@ def analyze(df, code, name, market, days, marcap=None):
     tr = pd.concat([h - l, (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
     atr = tr.rolling(14).mean()
     ma20 = c.rolling(20).mean()
-    ma60 = c.rolling(60).mean()
-    hi52 = h.rolling(min(250, len(d))).max()
     vol20 = v.rolling(20).mean()
     val20 = (c * v).rolling(20).mean()
     rngs = (h - l).replace(0, np.nan)
@@ -69,118 +129,187 @@ def analyze(df, code, name, market, days, marcap=None):
     volr = v / vol20
 
     A = d[["Open", "High", "Low", "Close", "Volume"]].values
+    HI = d["High"].values
     n = len(d)
     min_val = S["MIN_VALUE_KR"] if market == "kr" else S["MIN_VALUE_US"]
     min_px = S["MIN_PRICE_KR"] if market == "kr" else S["MIN_PRICE_US"]
     out = []
 
     for back in range(1, days + 1):
-        i = n - back                      # -1 = 최근 봉
-        if i < 70:
+        i = n - back
+        if i < 130:
             continue
         O, H, L, C = A[i, 0], A[i, 1], A[i, 2], A[i, 3]
-        av, m20, m60 = atr.iloc[i], ma20.iloc[i], ma60.iloc[i]
-        if not all(np.isfinite(x) for x in (av, m20, m60)) or not np.isfinite(val20.iloc[i]):
+        av, m20 = atr.iloc[i], ma20.iloc[i]
+        if not np.isfinite(av) or not np.isfinite(m20) or not np.isfinite(val20.iloc[i]):
             continue
         if val20.iloc[i] < min_val or C < min_px:
             continue
         rg = H - L
-        if rg <= 0 or rg < av * S["MIN_RANGE_ATR"]:
+        if rg <= 0:
             continue
-        vr = float(volr.iloc[i]) if np.isfinite(volr.iloc[i]) else 0
-        if vr < S["VOL_MIN"]:
+        vr = float(volr.iloc[i]) if np.isfinite(volr.iloc[i]) else 0.0
+
+        # 후보 목록: (패턴명, 저항가, 부가정보)
+        cands = []
+
+        # ① 도지
+        if rg >= av * S["MIN_RANGE_ATR"] and vr >= S["VOL_MIN"]:
+            k = doji_kind(float(body_r.iloc[i]), float(up_r.iloc[i]),
+                          float(dn_r.iloc[i]), rg / av if av > 0 else 1.0)
+            if k and k != "grave":
+                cands.append((f"도지({k})", H, k))
+
+        # ② 삼봉 / ③ 다중저항
+        pk = swing_highs(HI, i)
+        for lvl, touch, kind in find_resistances(pk, C):
+            cands.append((f"{kind}({touch}회)" if kind == "다중저항" else kind, lvl, kind))
+
+        if not cands:
             continue
 
-        kind = doji_kind(float(body_r.iloc[i]), float(up_r.iloc[i]),
-                         float(dn_r.iloc[i]), rg / av if av > 0 else 1.0)
-        if kind == "grave":
-            continue
-
-        pats = []
-        if kind:
-            pats.append(f"도지({kind})")
-        uptrend = C > m60 and m60 > (ma60.iloc[i - 10] if i >= 10 else m60)
-        prev_low = A[i - 1, 2] if i >= 1 else L
-        if uptrend and min(L, prev_low) <= m20 * 1.02 and C > m20 * 0.98:
-            pats.append("MA20눌림")
-        if C >= float(hi52.iloc[i]) * 0.99 and vr >= 1.5:
-            pats.append("52주신고가")
-        if vr >= S["VOL_SURGE"] and C > O and C > m20:
-            pats.append("거래량급증")
-        if not pats:
-            continue
-
-        entry = H * 1.002
-        # 손절 = 도지 직전 캔들 몸통의 위쪽 끝 (양봉이면 종가, 음봉이면 시가)
         pO, pC = A[i - 1, 0], A[i - 1, 3]
         stop1 = max(pO, pC)
-        if stop1 >= entry:                     # 직전 몸통이 도지 위 -> 무효
-            continue
-        stop2 = L - max(av * 0.15, entry * 0.001)
-        risk = entry - stop1
-        if risk <= 0:
-            continue
-        sp = risk / entry * 100
-        if sp > S["MAX_STOP1_PCT"]:
-            continue
 
-        # ── 이후 결과 추적 ──
-        status, brk_day, mx, res = "대기", None, None, ""
-        d0_hi = d0_cl = d1_hi = d1_cl = None
-        for j in range(i + 1, n):
-            if A[j, 2] <= stop2:                  # 도지 저가 이탈 -> 무효
-                status = "무효"
-                brk_day = j - i
-                break
-            if A[j, 1] >= entry:                  # 돌파
-                status = "돌파"
-                brk_day = j - i
-                mx = float(A[j:n, 1].max())
-                d0_hi = (A[j, 1] / entry - 1) * 100      # 돌파 당일 최고
-                d0_cl = (A[j, 3] / entry - 1) * 100      # 돌파 당일 종가
-                d1_hi = ((A[j + 1, 1] / entry - 1) * 100
-                         if j + 1 < n else None)          # 익일 최고
-                d1_cl = ((A[j + 1, 3] / entry - 1) * 100
-                         if j + 1 < n else None)
-                res = "보유중"
-                for k in range(j, n):
-                    if A[k, 1] >= entry + risk:
-                        res = "+1R달성"
-                        break
-                    if A[k, 3] <= stop1:
-                        res = "손절"
-                        break
-                break
+        for pname, lvl, extra in cands:
+            entry = lvl * 1.002
+            if stop1 >= entry:
+                continue
+            risk = entry - stop1
+            sp = risk / entry * 100
+            if sp <= 0 or sp > S["MAX_STOP1_PCT"]:
+                continue
 
-        px = (lambda x: int(round(x))) if market == "kr" else (lambda x: round(x, 2))
-        out.append(dict(
-            code=code, name=name, date=str(d.index[i])[:10], dback=back,
-            pats="+".join(pats), kind=kind or "-",
-            close=px(C), entry=px(entry), stop1=px(stop1), stop2=px(stop2),
-            tgt=px(entry + risk), stop_pct=round(sp, 2),
-            vol_ratio=round(vr, 2), value=(int(val20.iloc[i] / 1e8) if market == "kr"
-                                           else round(val20.iloc[i] / 1e6, 1)),
-            status=status, days_to=brk_day,
-            max_after=(px(mx) if mx else None),
-            gain=(round((mx / entry - 1) * 100, 2) if mx else None),
-            d0_hi=(round(d0_hi, 2) if d0_hi is not None else None),
-            d0_cl=(round(d0_cl, 2) if d0_cl is not None else None),
-            d1_hi=(round(d1_hi, 2) if d1_hi is not None else None),
-            d1_cl=(round(d1_cl, 2) if d1_cl is not None else None),
-            result=res, last=px(A[-1, 3]),
-        ))
+            status, brk_day, res = "대기", None, ""
+            d0_hi = d0_cl = d1_hi = mx = None
+            stop2 = L - max(av * 0.15, entry * 0.001)
+
+            for j in range(i + 1, n):
+                if A[j, 3] <= stop1:                 # 종가가 손절선 아래 -> 무효
+                    status, brk_day = "무효", j - i
+                    break
+                if A[j, 1] >= entry:                 # 장중 돌파
+                    status, brk_day = "돌파", j - i
+                    mx = float(A[j:n, 1].max())
+                    d0_hi = (A[j, 1] / entry - 1) * 100
+                    d0_cl = (A[j, 3] / entry - 1) * 100
+                    d1_hi = ((max(A[j, 1], A[j + 1, 1]) / entry - 1) * 100
+                             if j + 1 < n else d0_hi)
+                    res = "보유중"
+                    for k2 in range(j, n):
+                        if A[k2, 1] >= entry + risk:
+                            res = "+1R달성"
+                            break
+                        if A[k2, 3] <= stop1:
+                            res = "손절"
+                            break
+                    break
+
+            px = (lambda x: int(round(x))) if market == "kr" else (lambda x: round(x, 2))
+            out.append(dict(
+                code=code, name=name, date=str(d.index[i])[:10], dback=back,
+                pattern=pname, ptype=("도지" if pname.startswith("도지") else extra),
+                close=px(C), entry=px(entry), stop1=px(stop1), stop2=px(stop2),
+                tgt=px(entry + risk), stop_pct=round(sp, 2),
+                vol_ratio=round(vr, 2),
+                value=(int(val20.iloc[i] / 1e8) if market == "kr"
+                       else round(val20.iloc[i] / 1e6, 1)),
+                status=status, days_to=brk_day, result=res,
+                d0_hi=(round(d0_hi, 2) if d0_hi is not None else None),
+                d0_cl=(round(d0_cl, 2) if d0_cl is not None else None),
+                d1_hi=(round(d1_hi, 2) if d1_hi is not None else None),
+                gain=(round((mx / entry - 1) * 100, 2) if mx else None),
+                last=px(A[-1, 3]),
+            ))
     return out
+
+
+def report(df, mk, days):
+    L = []
+    L.append(f"[최근 {days}일 패턴 검증 · {'국장' if mk == 'kr' else '미장'}]")
+    L.append(f"기준일 {df['date'].max()} · 전체 후보 {len(df)}건")
+
+    brk = df[df["status"] == "돌파"]
+    wait = df[df["status"] == "대기"]
+    void = df[df["status"] == "무효"]
+
+    L.append("")
+    L.append("━━ 전체 ━━")
+    L.append(f"돌파 {len(brk)} · 대기 {len(wait)} · 무효 {len(void)}")
+
+    L.append("")
+    L.append("━━ 패턴별 성과 (당일 단타 기준) ━━")
+    L.append(f"{'패턴':<10}{'후보':>5}{'돌파':>6}{'돌파율':>7}"
+             f"{'당일+1%':>8}{'종가+':>7}{'당일최고':>9}")
+    for pt, g in df.groupby("ptype"):
+        b = g[g["status"] == "돌파"]
+        if len(b) == 0:
+            L.append(f"{pt:<10}{len(g):>5}{0:>6}      -")
+            continue
+        h0 = b["d0_hi"].dropna()
+        c0 = b["d0_cl"].dropna()
+        r1 = (h0 >= 1.0).mean() * 100 if len(h0) else 0
+        cp = (c0 > 0).mean() * 100 if len(c0) else 0
+        L.append(f"{pt:<10}{len(g):>5}{len(b):>6}{len(b)/len(g)*100:>6.0f}%"
+                 f"{r1:>7.0f}%{cp:>6.0f}%{h0.mean():>+8.2f}%")
+
+    if len(brk):
+        h0 = brk["d0_hi"].dropna()
+        c0 = brk["d0_cl"].dropna()
+        h1 = brk["d1_hi"].dropna()
+        L.append("")
+        L.append("━━ 전체 돌파분 상세 ━━")
+        L.append(f"  당일 최고 평균 {h0.mean():+.2f}% · 중앙 {h0.median():+.2f}%")
+        L.append(f"  당일 종가 평균 {c0.mean():+.2f}% · 중앙 {c0.median():+.2f}%")
+        L.append(f"  당일 종가가 진입가 위: {(c0>0).sum()}/{len(c0)}건 "
+                 f"({(c0>0).mean()*100:.0f}%)")
+        L.append("  당일 도달률: " + " · ".join(
+            f"+{x}% {(h0>=x).sum()}건({(h0>=x).mean()*100:.0f}%)" for x in (0.5, 1, 2, 3)))
+        L.append(f"  익일까지 최고 평균 {h1.mean():+.2f}%")
+        L.append(f"  손절폭 중앙 {df['stop_pct'].median():.2f}% · "
+                 f"돌파까지 평균 {brk['days_to'].mean():.1f}일")
+
+        L.append("")
+        L.append("━━ 월별 ━━")
+        t = df.copy()
+        t["ym"] = t["date"].str[:7]
+        for ym, g in t.groupby("ym"):
+            b = g[g["status"] == "돌파"]
+            hh = b["d0_hi"].dropna()
+            L.append(f"  {ym}  후보 {len(g):3d} · 돌파 {len(b):3d} "
+                     f"({len(b)/len(g)*100:3.0f}%)"
+                     + (f" · 당일+1% {(hh>=1).mean()*100:3.0f}%" if len(hh) else ""))
+
+    L.append("")
+    L.append("━━ 대기 중 (감시 대상) ━━")
+    if len(wait) == 0:
+        L.append("없음")
+    for _, r in wait.sort_values(["dback", "stop_pct"]).head(12).iterrows():
+        L.append(f"\n{r['name'][:18]} ({r['code']})  [{r['pattern']}]")
+        L.append(f"  신호 {r['date']} ({r['dback']}거래일 전) · "
+                 f"거래대금 {r['value']}{'억' if mk=='kr' else 'M$'}")
+        L.append(f"  진입 {r['entry']:,} · 익절 {r['tgt']:,} · "
+                 f"손절 {r['stop1']:,} (-{r['stop_pct']}%)")
+        L.append(f"  현재 {r['last']:,} (진입까지 {(r['entry']/r['last']-1)*100:+.2f}%)")
+
+    if len(brk):
+        L.append("")
+        L.append("━━ 이미 돌파 (당일 성과순) ━━")
+        for _, r in brk.sort_values("d0_hi", ascending=False).head(10).iterrows():
+            L.append(f"\n{r['name'][:16]} [{r['pattern']}] {r['date']}")
+            L.append(f"  {r['days_to']}일 후 돌파 (진입 {r['entry']:,}) · "
+                     f"당일 최고 {r['d0_hi']:+.2f}% / 종가 {r['d0_cl']:+.2f}%")
+    return "\n".join(L)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--market", choices=["kr", "us"], default="kr")
-    ap.add_argument("--days", type=int, default=5)
+    ap.add_argument("--days", type=int, default=60)
     ap.add_argument("--universe", type=int, default=800)
     ap.add_argument("--workers", type=int, default=6)
     a = ap.parse_args()
     mk = a.market
-    unit = "원" if mk == "kr" else "$"
 
     print(f"[1/3] 유니버스 ({mk.upper()} {a.universe})...", flush=True)
     uni = SC.universe_kr(a.universe) if mk == "kr" else SC.universe_us(a.universe)
@@ -190,7 +319,7 @@ def main():
     rows, done = [], 0
     if mk == "kr":
         end = datetime.today()
-        s = (end - timedelta(days=400)).strftime("%Y-%m-%d")
+        s = (end - timedelta(days=700)).strftime("%Y-%m-%d")
         e = end.strftime("%Y-%m-%d")
         with ThreadPoolExecutor(max_workers=a.workers) as ex:
             futs = {ex.submit(SC.fetch_kr, c, s, e): (c, n, m) for c, n, m in uni}
@@ -207,7 +336,7 @@ def main():
         meta = {c: n for c, n, _ in uni}
         syms = list(meta.keys())
         for k in range(0, len(syms), 150):
-            for t, dd in SC.fetch_us_batch(syms[k:k + 150]).items():
+            for t, dd in SC.fetch_us_batch(syms[k:k + 150], period="2y").items():
                 try:
                     rows.extend(analyze(dd, t, meta.get(t, t), mk, a.days))
                 except Exception:
@@ -221,117 +350,11 @@ def main():
     df = pd.DataFrame(rows)
     os.makedirs("results", exist_ok=True)
     df.to_csv(f"results/verify_{mk}.csv", index=False, encoding="utf-8-sig")
-
-    wait = df[df["status"] == "대기"].sort_values(["dback", "stop_pct"])
-    brk = df[df["status"] == "돌파"]
-    void = df[df["status"] == "무효"]
-    dj = df[df["kind"] != "-"]
-    dj_brk = dj[dj["status"] == "돌파"]
-
-    L = []
-    L.append(f"[최근 {a.days}일 도지 검증 · {'국장' if mk == 'kr' else '미장'}]")
-    L.append(f"기준일 {df['date'].max()} · 전체 후보 {len(df)}건")
-    L.append("")
-    L.append("━━ 결과 집계 ━━")
-    L.append(f"돌파 {len(brk)}건 · 대기 {len(wait)}건 · 무효 {len(void)}건")
-    if len(brk):
-        r1 = (brk["result"] == "+1R달성").sum()
-        sl = (brk["result"] == "손절").sum()
-        L.append(f"돌파 후 +1R 달성 {r1}건 ({r1/len(brk)*100:.0f}%) · "
-                 f"손절 {sl}건 ({sl/len(brk)*100:.0f}%)")
-        L.append(f"돌파까지 평균 {brk['days_to'].mean():.1f}일 · "
-                 f"돌파 후 최대 상승 평균 {brk['gain'].mean():+.2f}%")
-    if len(dj):
-        L.append("")
-        L.append(f"도지만 따로: {len(dj)}건 중 돌파 {len(dj_brk)}건 "
-                 f"({len(dj_brk)/len(dj)*100:.0f}%)")
-        if len(dj_brk):
-            L.append(f"  도지 돌파 후 최대상승 평균 {dj_brk['gain'].mean():+.2f}% · "
-                     f"+1R 달성 {(dj_brk['result']=='+1R달성').sum()}건")
-        kc = dj["kind"].value_counts().to_dict()
-        L.append("  유형: " + " · ".join(f"{k} {v}" for k, v in kc.items()))
-
-    if len(brk):
-        import numpy as _np
-        L.append("")
-        L.append("━━ 당일 단타 기준 성과 (돌파 당일) ━━")
-        h0 = brk["d0_hi"].dropna()
-        c0 = brk["d0_cl"].dropna()
-        if len(h0):
-            L.append(f"  돌파 당일 최고  평균 {h0.mean():+.2f}% · 중앙 {h0.median():+.2f}%")
-            L.append(f"  돌파 당일 종가  평균 {c0.mean():+.2f}% · 중앙 {c0.median():+.2f}%")
-            L.append(f"  당일 +1% 도달 {(h0>=1).sum()}/{len(h0)}건 ({(h0>=1).mean()*100:.0f}%)"
-                     f" · +2% {(h0>=2).sum()}건 · +3% {(h0>=3).sum()}건")
-            L.append(f"  당일 종가가 진입가 위 {(c0>0).sum()}/{len(c0)}건 "
-                     f"({(c0>0).mean()*100:.0f}%)")
-        h1 = brk["d1_hi"].dropna()
-        if len(h1):
-            L.append(f"  익일까지 최고   평균 {h1.mean():+.2f}% · "
-                     f"+1% 도달 {(h1>=1).mean()*100:.0f}%")
-
-        L.append("")
-        L.append("━━ 월별 구간 (시장 국면 확인) ━━")
-        bm = brk.copy()
-        bm["ym"] = bm["date"].str[:7]
-        for ym, g in bm.groupby("ym"):
-            gh = g["d0_hi"].dropna()
-            if len(gh) == 0:
-                continue
-            L.append(f"  {ym}  돌파 {len(g)}건 · 당일최고 평균 {gh.mean():+.2f}% · "
-                     f"+1% 도달 {(gh>=1).mean()*100:.0f}%")
-
-        L.append("")
-        L.append("━━ 손절폭 분포 (직전캔들 몸통 기준) ━━")
-        sp = df["stop_pct"].values
-        L.append(f"  중앙 {_np.median(sp):.2f}% · "
-                 f"하위25% {_np.percentile(sp, 25):.2f}% · "
-                 f"상위75% {_np.percentile(sp, 75):.2f}%")
-        L.append("")
-        L.append("━━ 목표 도달률 (돌파분 기준) ━━")
-        L.append("  목표    도달")
-        for cap in (1.0, 1.5, 2.0, 3.0, 5.0):
-            g = brk["gain"].dropna()
-            hit = (g >= cap).sum()
-            L.append(f"  +{cap:3.1f}%   {hit:3d}/{len(g)}건 ({hit/max(len(g),1)*100:3.0f}%)")
-
-    L.append("")
-    L.append("━━ 아직 대기 중 (감시 대상) ━━")
-    if len(wait) == 0:
-        L.append("없음")
-    for _, r in wait.head(12).iterrows():
-        L.append(f"\n{r['name'][:18]} ({r['code']})  [{r['pats']}]")
-        L.append(f"  도지 발생 {r['date']} ({r['dback']}거래일 전)")
-        L.append(f"  거래량 {r['vol_ratio']}배 · "
-                 f"거래대금 {r['value']}{'억' if mk=='kr' else 'M$'}")
-        L.append(f"  진입 {r['entry']:,} · 익절 {r['tgt']:,} · "
-                 f"손절 {r['stop1']:,} (-{r['stop_pct']}%)")
-        L.append(f"  현재 {r['last']:,} (진입까지 "
-                 f"{(r['entry']/r['last']-1)*100:+.2f}%)")
-
-    if len(brk):
-        L.append("")
-        L.append("━━ 이미 돌파 (참고) ━━")
-        for _, r in brk.sort_values("gain", ascending=False).head(12).iterrows():
-            L.append(f"\n{r['name'][:16]} [{r['pats']}]")
-            L.append(f"  도지 {r['date']} → {r['days_to']}거래일 후 돌파 "
-                     f"(진입 {r['entry']:,})")
-            d0 = f"당일 최고 {r['d0_hi']:+.2f}% / 종가 {r['d0_cl']:+.2f}%" \
-                if r['d0_hi'] is not None else ""
-            L.append(f"  {d0}")
-            L.append(f"  이후 최고 {r['max_after']:,} ({r['gain']:+.2f}%) · {r['result']}")
-
-    if len(void):
-        L.append("")
-        L.append("━━ 무효 (도지 저가 이탈) ━━")
-        for _, r in void.head(8).iterrows():
-            L.append(f"{r['name'][:16]} · 도지 {r['date']} → "
-                     f"{r['days_to']}거래일 후 저가 이탈")
-
-    txt = "\n".join(L)
+    txt = report(df, mk, a.days)
     print("\n" + txt)
     with open(f"results/verify_{mk}.txt", "w", encoding="utf-8") as f:
         f.write(txt)
-    print(f"\nresults/verify_{mk}.txt · .csv 저장")
+    print(f"\nresults/verify_{mk}.txt 저장")
 
 
 if __name__ == "__main__":
