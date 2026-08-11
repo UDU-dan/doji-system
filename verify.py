@@ -37,6 +37,9 @@ CLUSTER_PCT = 1.5    # 이 % 안이면 같은 저항선
 MIN_GAP = 15         # 고점 간 최소 간격(거래일)
 MIN_TOUCH = 2        # 최소 터치 횟수
 RES_NEAR = 3.0       # 현재가가 저항선 이 % 아래일 때만 후보
+RES_STOP_BUF = 1.5   # 저항선 돌파형 손절: 저항선 아래 이 %
+STOP_MIN = 1.0       # 손절폭 하한 %
+STOP_MAX = 3.0       # 손절폭 상한 %
 
 
 def doji_kind(body_r, up_r, dn_r, rng_atr=1.0):
@@ -83,24 +86,27 @@ def find_resistances(peaks, price):
         if used[a]:
             continue
         grp = [peaks[a][1]]
+        gidx = [peaks[a][0]]
         used[a] = True
         for b in range(a + 1, len(peaks)):
             if used[b]:
                 continue
             if abs(peaks[b][1] - peaks[a][1]) / peaks[a][1] * 100 <= CLUSTER_PCT:
                 grp.append(peaks[b][1])
+                gidx.append(peaks[b][0])
                 used[b] = True
         if len(grp) >= MIN_TOUCH:
             lvl = float(np.mean(grp))
             if price < lvl <= price * (1 + RES_NEAR / 100):
-                res.append((lvl, len(grp), "다중저항"))
+                res.append((lvl, len(grp), "다중저항", list(gidx)))
 
     # 삼봉: 연속 3개 중 가운데가 최고
     for k in range(len(peaks) - 2):
         p1, p2, p3 = peaks[k][1], peaks[k + 1][1], peaks[k + 2][1]
         if p2 > p1 and p2 > p3:
             if price < p2 <= price * (1 + RES_NEAR / 100):
-                res.append((float(p2), 3, "삼봉"))
+                res.append((float(p2), 3, "삼봉",
+                            [peaks[k][0], peaks[k + 1][0], peaks[k + 2][0]]))
     return res
 
 
@@ -158,12 +164,16 @@ def analyze(df, code, name, market, days, marcap=None):
             k = doji_kind(float(body_r.iloc[i]), float(up_r.iloc[i]),
                           float(dn_r.iloc[i]), rg / av if av > 0 else 1.0)
             if k and k != "grave":
-                cands.append((f"도지({k})", H, k))
+                cands.append((f"도지({k})", H, "도지",
+                              f"{str(d.index[i])[5:10]} 고가 {int(round(H)):,}"))
 
         # ② 삼봉 / ③ 다중저항
         pk = swing_highs(HI, i)
-        for lvl, touch, kind in find_resistances(pk, C):
-            cands.append((f"{kind}({touch}회)" if kind == "다중저항" else kind, lvl, kind))
+        for lvl, touch, kind, idxs in find_resistances(pk, C):
+            pts = " / ".join(f"{str(d.index[q])[5:10]} {int(round(HI[q])):,}"
+                             for q in sorted(idxs))
+            cands.append((f"{kind}({touch}회)" if kind == "다중저항" else kind,
+                          lvl, kind, pts))
 
         if not cands:
             continue
@@ -171,15 +181,19 @@ def analyze(df, code, name, market, days, marcap=None):
         pO, pC = A[i - 1, 0], A[i - 1, 3]
         body_top = max(pO, pC)
 
-        for pname, lvl, extra in cands:
+        for pname, lvl, ptype, pts in cands:
             entry = lvl * 1.002
-            # 손절 = 직전캔들 몸통 위쪽, 단 최소폭 확보
-            stop1 = min(body_top, entry * (1 - S["MIN_STOP1_PCT"] / 100))
+            if ptype == "도지":
+                base = body_top                          # 직전 캔들 몸통 위쪽
+            else:
+                base = lvl * (1 - RES_STOP_BUF / 100)    # 저항선 아래 버퍼
+                base = max(base, min(body_top, lvl))     # 몸통이 더 가까우면 그걸로
+            stop1 = min(base, entry * (1 - STOP_MIN / 100))
             if stop1 >= entry:
                 continue
             risk = entry - stop1
             sp = risk / entry * 100
-            if sp <= 0 or sp > S["MAX_STOP1_PCT"]:
+            if sp <= 0 or sp > STOP_MAX:
                 continue
 
             status, brk_day, res = "대기", None, ""
@@ -187,7 +201,7 @@ def analyze(df, code, name, market, days, marcap=None):
             stop2 = L - max(av * 0.15, entry * 0.001)
 
             for j in range(i + 1, n):
-                if A[j, 3] <= stop1:                 # 종가가 손절선 아래 -> 무효
+                if A[j, 3] <= stop1:                  # 종가가 손절선 아래 -> 무효
                     status, brk_day = "무효", j - i
                     break
                 if A[j, 1] >= entry:                 # 장중 돌파
@@ -210,8 +224,9 @@ def analyze(df, code, name, market, days, marcap=None):
             px = (lambda x: int(round(x))) if market == "kr" else (lambda x: round(x, 2))
             out.append(dict(
                 code=code, name=name, date=str(d.index[i])[:10], dback=back,
-                pattern=pname, ptype=("도지" if pname.startswith("도지") else extra),
+                pattern=pname, ptype=ptype,
                 close=px(C), entry=px(entry), stop1=px(stop1), stop2=px(stop2),
+                points=pts,
                 tgt=px(entry + risk), stop_pct=round(sp, 2),
                 vol_ratio=round(vr, 2),
                 value=(int(val20.iloc[i] / 1e8) if market == "kr"
@@ -239,6 +254,42 @@ def merge_dup(x):
 
     return (x.groupby(["code", "date"], group_keys=True)
              .apply(_m, include_groups=False).reset_index())
+
+
+def merge_and_score(wait, mk):
+    """같은 종목의 여러 패턴을 하나로 합치고 점수를 매긴다."""
+    out = []
+    for code, g in wait.groupby("code"):
+        g = g.sort_values("stop_pct")
+        r = g.iloc[0].to_dict()
+        pats = sorted(set(g["pattern"]))
+        pts = []
+        for p in g["points"]:
+            for x in str(p).split(" / "):
+                if x and x not in pts:
+                    pts.append(x)
+        togo = (r["entry"] / r["last"] - 1) * 100
+
+        # 점수: 패턴 수 · 터치 수 · 손절폭 · 근접도 · 거래대금
+        n_pat = len(pats)
+        touch = sum(int(x.split("(")[1].split("회")[0])
+                    for x in pats if "다중저항" in x and "회" in x) or 0
+        sc_pat = min(n_pat, 3) / 3 * 100
+        sc_touch = min(touch / 4, 1.0) * 100
+        sc_stop = max(0.0, 1 - r["stop_pct"] / STOP_MAX) * 100
+        sc_near = max(0.0, 1 - abs(togo) / 3.0) * 100
+        base = 1e9 if mk == "kr" else 3e7
+        sc_liq = float(np.clip(np.log10(max(r["value"] * (1e8 if mk == "kr" else 1e6), 1)
+                                        / base) / 1.5, 0, 1) * 100)
+        score = (sc_pat * 25 + sc_touch * 15 + sc_stop * 25 +
+                 sc_near * 25 + sc_liq * 10) / 100
+
+        r["pattern"] = " + ".join(pats)
+        r["points"] = pts[:5]
+        r["togo"] = round(togo, 2)
+        r["score"] = round(score, 1)
+        out.append(r)
+    return sorted(out, key=lambda x: -x["score"])
 
 
 def report(df, mk, days):
@@ -285,6 +336,16 @@ def report(df, mk, days):
         L.append(f"  익일까지 최고 평균 {h1.mean():+.2f}%")
         L.append(f"  손절폭 중앙 {df['stop_pct'].median():.2f}% · "
                  f"돌파까지 평균 {brk['days_to'].mean():.1f}일")
+        L.append("")
+        L.append("  손절폭별 (당일 최고가가 손절폭 이상 = 1R 달성)")
+        for cap in (1.0, 1.5, 2.0, 2.5, 3.0):
+            sub = brk[brk["stop_pct"] <= cap]
+            if len(sub) < 5:
+                continue
+            hh = sub["d0_hi"].dropna()
+            ok = (hh >= sub.loc[hh.index, "stop_pct"]).mean() * 100
+            L.append(f"    ~{cap:.1f}%  {len(sub):3d}건 · 당일 1R달성 {ok:3.0f}% · "
+                     f"당일최고 평균 {hh.mean():+.2f}%")
 
         L.append("")
         L.append("━━ 월별 ━━")
@@ -298,16 +359,19 @@ def report(df, mk, days):
                      + (f" · 당일+1% {(hh>=1).mean()*100:3.0f}%" if len(hh) else ""))
 
     L.append("")
-    L.append("━━ 대기 중 (감시 대상) ━━")
+    L.append("━━ 대기 중 · 점수 상위 10 ━━")
     if len(wait) == 0:
         L.append("없음")
-    for _, r in merge_dup(wait).sort_values(["dback", "stop_pct"]).head(12).iterrows():
-        L.append(f"\n{r['name'][:18]} ({r['code']})  [{r['pattern']}]")
-        L.append(f"  신호 {r['date']} ({r['dback']}거래일 전) · "
-                 f"거래대금 {r['value']}{'억' if mk=='kr' else 'M$'}")
-        L.append(f"  진입 {r['entry']:,} · 익절 {r['tgt']:,} · "
-                 f"손절 {r['stop1']:,} (-{r['stop_pct']}%)")
-        L.append(f"  현재 {r['last']:,} (진입까지 {(r['entry']/r['last']-1)*100:+.2f}%)")
+    else:
+        for k, r in enumerate(merge_and_score(wait, mk)[:10], 1):
+            L.append(f"\n{k}위 {r['name'][:18]} ({r['code']})  {r['score']}점")
+            L.append(f"  [{r['pattern']}] · 신호 {r['date']}")
+            for p in r["points"]:
+                L.append(f"    · {p}")
+            L.append(f"  진입 {r['entry']:,} · 익절 {r['tgt']:,} · "
+                     f"손절 {r['stop1']:,} (-{r['stop_pct']}%)")
+            L.append(f"  현재 {r['last']:,} (진입까지 {r['togo']:+.2f}%) · "
+                     f"거래대금 {r['value']}{'억' if mk=='kr' else 'M$'}")
 
     if len(brk):
         L.append("")
