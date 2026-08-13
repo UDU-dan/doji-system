@@ -32,10 +32,10 @@ S = SC.S
 # 패턴 파라미터
 SWING_N = 5          # 좌우 이 일수보다 높으면 스윙 고점
 PROMINENCE = 2.0     # 봉우리가 주변 저점보다 이 % 이상 튀어나와야 인정
-LOOKBACK = 120       # 저항선 탐색 기간 (약 6개월)
+LOOKBACK = 1250      # 저항선 탐색 기간 (약 5년)
 SHOULDER_MIN = 85.0  # 삼봉: 어깨가 머리의 이 % 이상이어야 인정
 SHOULDER_MAX = 98.0  # 어깨가 머리의 이 % 이하 (가운데가 확실히 높아야)
-CLUSTER_PCT = 0.0    # 0 = 완전히 같은 가격만 같은 저항선으로 인정
+CLUSTER_PCT = 0.0    # 고가가 완전히 일치할 때만 같은 저항선
 MIN_GAP = 15         # 고점 간 최소 간격(거래일)
 MIN_TOUCH = 2        # 최소 터치 횟수
 RES_NEAR = 3.0       # 현재가가 저항선 이 % 아래일 때만 후보
@@ -128,14 +128,14 @@ STATS = dict(total=0, liquidity=0, doji=0, peaks=0, stopwidth=0, wait=0)
 
 
 def analyze(df, code, name, market, days, marcap=None):
-    if df is None or len(df) < 140:
+    if df is None or len(df) < 150:
         return []
     d = df.copy()
     d.columns = [str(x).capitalize() for x in d.columns]
     if not {"Open", "High", "Low", "Close", "Volume"}.issubset(d.columns):
         return []
     d = d.dropna(subset=["Open", "High", "Low", "Close"])
-    if len(d) < 140:
+    if len(d) < 150:
         return []
 
     o, h, l, c, v = d["Open"], d["High"], d["Low"], d["Close"], d["Volume"]
@@ -190,7 +190,7 @@ def analyze(df, code, name, market, days, marcap=None):
         # ② 삼봉 / ③ 다중저항
         pk = swing_highs(HI, i)
         for lvl, touch, kind, idxs in find_resistances(pk, C):
-            pts = " / ".join(f"{str(d.index[q])[5:10]} {int(round(HI[q])):,}"
+            pts = " / ".join(f"{str(d.index[q])[:7]} {int(round(HI[q])):,}"
                              for q in sorted(idxs))
             STATS["peaks"] += 1
             cands.append((f"{kind}({touch}회)" if kind == "다중저항" else kind,
@@ -428,7 +428,7 @@ def main():
     rows, done = [], 0
     if mk == "kr":
         end = datetime.today()
-        s = (end - timedelta(days=700)).strftime("%Y-%m-%d")
+        s = (end - timedelta(days=2000)).strftime("%Y-%m-%d")
         e = end.strftime("%Y-%m-%d")
         with ThreadPoolExecutor(max_workers=a.workers) as ex:
             futs = {ex.submit(SC.fetch_kr, c, s, e): (c, n, m) for c, n, m in uni}
@@ -445,7 +445,7 @@ def main():
         meta = {c: n for c, n, _ in uni}
         syms = list(meta.keys())
         for k in range(0, len(syms), 150):
-            for t, dd in SC.fetch_us_batch(syms[k:k + 150], period="2y").items():
+            for t, dd in SC.fetch_us_batch(syms[k:k + 150], period="5y").items():
                 try:
                     rows.extend(analyze(dd, t, meta.get(t, t), mk, a.days))
                 except Exception:
