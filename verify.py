@@ -35,7 +35,7 @@ PROMINENCE = 2.0     # 봉우리가 주변 저점보다 이 % 이상 튀어나�
 LOOKBACK = 120       # 저항선 탐색 기간 (약 6개월)
 SHOULDER_MIN = 85.0  # 삼봉: 어깨가 머리의 이 % 이상이어야 인정
 SHOULDER_MAX = 98.0  # 어깨가 머리의 이 % 이하 (가운데가 확실히 높아야)
-CLUSTER_PCT = 1.5    # 이 % 안이면 같은 저항선
+CLUSTER_PCT = 0.0    # 0 = 완전히 같은 가격만 같은 저항선으로 인정
 MIN_GAP = 15         # 고점 간 최소 간격(거래일)
 MIN_TOUCH = 2        # 최소 터치 횟수
 RES_NEAR = 3.0       # 현재가가 저항선 이 % 아래일 때만 후보
@@ -44,8 +44,11 @@ STOP_MIN = 1.0       # 손절폭 하한 %
 STOP_MAX = 3.0       # 손절폭 상한 %
 
 
+BODY_MAX = 5.0       # 도지 몸통 최대 비율 %
+
+
 def doji_kind(body_r, up_r, dn_r, rng_atr=1.0):
-    if body_r > S["BODY_MAX_PCT"]:
+    if body_r > min(BODY_MAX, S.get("BODY_MAX_PCT", BODY_MAX)):
         return None
     if dn_r >= S["DRAGON_LOWER"] and up_r <= S["DRAGON_UPPER"]:
         return "잠자리"
@@ -121,6 +124,9 @@ def find_resistances(peaks, price):
     return res
 
 
+STATS = dict(total=0, liquidity=0, doji=0, peaks=0, stopwidth=0, wait=0)
+
+
 def analyze(df, code, name, market, days, marcap=None):
     if df is None or len(df) < 140:
         return []
@@ -160,8 +166,10 @@ def analyze(df, code, name, market, days, marcap=None):
         av, m20 = atr.iloc[i], ma20.iloc[i]
         if not np.isfinite(av) or not np.isfinite(m20) or not np.isfinite(val20.iloc[i]):
             continue
+        STATS["total"] += 1
         if val20.iloc[i] < min_val or C < min_px:
             continue
+        STATS["liquidity"] += 1
         rg = H - L
         if rg <= 0:
             continue
@@ -175,6 +183,7 @@ def analyze(df, code, name, market, days, marcap=None):
             k = doji_kind(float(body_r.iloc[i]), float(up_r.iloc[i]),
                           float(dn_r.iloc[i]), rg / av if av > 0 else 1.0)
             if k and k != "grave":
+                STATS["doji"] += 1
                 cands.append((f"도지({k})", H, "도지",
                               f"{str(d.index[i])[5:10]} 고가 {int(round(H)):,}"))
 
@@ -183,6 +192,7 @@ def analyze(df, code, name, market, days, marcap=None):
         for lvl, touch, kind, idxs in find_resistances(pk, C):
             pts = " / ".join(f"{str(d.index[q])[5:10]} {int(round(HI[q])):,}"
                              for q in sorted(idxs))
+            STATS["peaks"] += 1
             cands.append((f"{kind}({touch}회)" if kind == "다중저항" else kind,
                           lvl, kind, pts))
 
@@ -206,15 +216,14 @@ def analyze(df, code, name, market, days, marcap=None):
             sp = risk / entry * 100
             if sp <= 0 or sp > STOP_MAX:
                 continue
+            STATS["stopwidth"] += 1
 
             status, brk_day, res = "대기", None, ""
             d0_hi = d0_cl = d1_hi = mx = None
             stop2 = L - max(av * 0.15, entry * 0.001)
 
+            below = False
             for j in range(i + 1, n):
-                if A[j, 3] <= stop1:                  # 종가가 손절선 아래 -> 무효
-                    status, brk_day = "무효", j - i
-                    break
                 if A[j, 1] >= entry:                 # 장중 돌파
                     status, brk_day = "돌파", j - i
                     mx = float(A[j:n, 1].max())
@@ -231,6 +240,11 @@ def analyze(df, code, name, market, days, marcap=None):
                             res = "손절"
                             break
                     break
+                # 종가가 손절선 아래면 보류. 위로 복귀하면 다시 대기.
+                below = A[j, 3] <= stop1
+
+            if status == "대기" and below:
+                status = "보류"
 
             px = (lambda x: int(round(x))) if market == "kr" else (lambda x: round(x, 2))
             out.append(dict(
@@ -310,11 +324,14 @@ def report(df, mk, days):
 
     brk = df[df["status"] == "돌파"]
     wait = df[df["status"] == "대기"]
-    void = df[df["status"] == "무효"]
+    hold = df[df["status"] == "보류"]
 
     L.append("")
     L.append("━━ 전체 ━━")
-    L.append(f"돌파 {len(brk)} · 대기 {len(wait)} · 무효 {len(void)}")
+    L.append(f"돌파 {len(brk)} · 대기 {len(wait)} · 보류 {len(hold)}")
+    L.append(f"필터 통과: 유동성 {STATS['liquidity']}/{STATS['total']} · "
+             f"도지 {STATS['doji']} · 저항선 {STATS['peaks']} · "
+             f"손절폭 {STATS['stopwidth']}")
 
     L.append("")
     L.append("━━ 패턴별 성과 (당일 단타 기준) ━━")
