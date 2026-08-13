@@ -185,16 +185,17 @@ def analyze(df, code, name, market, days, marcap=None):
             if k and k != "grave":
                 STATS["doji"] += 1
                 cands.append((f"도지({k})", H, "도지",
-                              f"{str(d.index[i])[5:10]} 고가 {int(round(H)):,}"))
+                              f"{str(d.index[i])[5:10]} 고가 {int(round(H)):,}", 0))
 
         # ② 삼봉 / ③ 다중저항
         pk = swing_highs(HI, i)
         for lvl, touch, kind, idxs in find_resistances(pk, C):
             pts = " / ".join(f"{str(d.index[q])[:7]} {int(round(HI[q])):,}"
                              for q in sorted(idxs))
+            age_d = i - min(idxs)          # 가장 오래된 지점까지의 거래일
             STATS["peaks"] += 1
             cands.append((f"{kind}({touch}회)" if kind == "다중저항" else kind,
-                          lvl, kind, pts))
+                          lvl, kind, pts, age_d))
 
         if not cands:
             continue
@@ -202,7 +203,7 @@ def analyze(df, code, name, market, days, marcap=None):
         pO, pC = A[i - 1, 0], A[i - 1, 3]
         body_top = max(pO, pC)
 
-        for pname, lvl, ptype, pts in cands:
+        for pname, lvl, ptype, pts, age_d in cands:
             entry = lvl * 1.002
             if ptype == "도지":
                 base = body_top                          # 직전 캔들 몸통 위쪽
@@ -251,7 +252,7 @@ def analyze(df, code, name, market, days, marcap=None):
                 code=code, name=name, date=str(d.index[i])[:10], dback=back,
                 pattern=pname, ptype=ptype,
                 close=px(C), entry=px(entry), stop1=px(stop1), stop2=px(stop2),
-                points=pts,
+                points=pts, age_days=int(age_d),
                 tgt=px(entry + risk), stop_pct=round(sp, 2),
                 vol_ratio=round(vr, 2),
                 value=(int(val20.iloc[i] / 1e8) if market == "kr"
@@ -281,10 +282,22 @@ def merge_dup(x):
              .apply(_m, include_groups=False).reset_index())
 
 
+def age_tag(r):
+    """저항선이 얼마나 오래됐는지 표시"""
+    d = int(r.get("age_days", 0) or 0)
+    if d < 250:
+        return ""
+    y = d / 250
+    mark = "  ** " if y >= 3 else "  * "
+    return f"{mark}저항선 {y:.1f}년 전 형성 - 재확인 권장"
+
+
 def merge_and_score(wait, mk):
-    """같은 종목의 여러 패턴을 하나로 합치고 점수를 매긴다."""
+    """같은 종목·같은 저항선끼리만 합치고 점수를 매긴다."""
     out = []
-    for code, g in wait.groupby("code"):
+    w = wait.copy()
+    w["_lvl"] = w["entry"].round(0)          # 저항선(진입가) 단위로 구분
+    for (code, lvl), g in w.groupby(["code", "_lvl"]):
         g = g.sort_values("stop_pct")
         r = g.iloc[0].to_dict()
         pats = sorted(set(g["pattern"]))
@@ -313,8 +326,14 @@ def merge_and_score(wait, mk):
         r["points"] = pts[:5]
         r["togo"] = round(togo, 2)
         r["score"] = round(score, 1)
+        r["age_days"] = int(g["age_days"].max())
         out.append(r)
-    return sorted(out, key=lambda x: -x["score"])
+    # 같은 종목이 여러 저항선을 가지면 점수 높은 것만 남긴다
+    best = {}
+    for r in sorted(out, key=lambda x: -x["score"]):
+        if r["code"] not in best:
+            best[r["code"]] = r
+    return sorted(best.values(), key=lambda x: -x["score"])
 
 
 def report(df, mk, days):
@@ -393,7 +412,7 @@ def report(df, mk, days):
     else:
         for k, r in enumerate(merge_and_score(wait, mk)[:10], 1):
             L.append(f"\n{k}위 {r['name'][:18]} ({r['code']})  {r['score']}점")
-            L.append(f"  [{r['pattern']}] · 신호 {r['date']}")
+            L.append(f"  [{r['pattern']}] · 신호 {r['date']}{age_tag(r)}")
             for p in r["points"]:
                 L.append(f"    · {p}")
             L.append(f"  진입 {r['entry']:,} · 익절 {r['tgt']:,} · "
