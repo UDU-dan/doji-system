@@ -359,13 +359,19 @@ def us_prices(codes):
 
 
 def session_bounds(market):
+    """다음 거래일의 개장·마감 시각. 마감이 지났거나 주말이면 다음 평일로."""
+    from datetime import timedelta
     if market == "kr":
-        d = datetime.now(KST)
-        return (datetime.combine(d.date(), dtime(9, 0), KST),
-                datetime.combine(d.date(), dtime(15, 20), KST))
-    d = datetime.now(NY)
-    return (datetime.combine(d.date(), dtime(9, 30), NY),
-            datetime.combine(d.date(), dtime(16, 0), NY))
+        tz, o, c = KST, dtime(9, 0), dtime(15, 20)
+    else:
+        tz, o, c = NY, dtime(9, 30), dtime(16, 0)
+    d = datetime.now(tz)
+    day = d.date()
+    if d.time() >= c:                    # 이미 마감했으면 다음 날
+        day += timedelta(days=1)
+    while day.weekday() >= 5:            # 토·일 건너뛰기
+        day += timedelta(days=1)
+    return (datetime.combine(day, o, tz), datetime.combine(day, c, tz))
 
 
 # ══════════ 메인 ══════════
@@ -387,7 +393,8 @@ def main():
     hard = time.time() + a.max_minutes * 60
 
     L = [f"[{label} 지정가 감시] {datetime.now(KST):%m/%d %H:%M} KST",
-         f"개장 {open_at.astimezone(KST):%H:%M} · 마감 {close_at.astimezone(KST):%H:%M} KST"]
+         f"다음 개장 {open_at.astimezone(KST):%m/%d %H:%M} · "
+         f"마감 {close_at.astimezone(KST):%H:%M} KST"]
     if store:
         L.append(f"\n감시 {len(store)}종목")
         for c, v in store.items():
@@ -400,12 +407,19 @@ def main():
     print("\n".join(L), flush=True)
 
     # 개장 대기 (그동안에도 명령은 받는다)
+    last_log = 0
     while datetime.now(KST) < open_at and time.time() < hard:
         msgs, offset = tg_updates(offset)
         for m in msgs:
             resp = handle(m, store, mk, pending)
             if resp:
                 tg(resp)
+                save_store(store)
+        if time.time() - last_log > 600:
+            last_log = time.time()
+            left = (open_at - datetime.now(KST)).total_seconds() / 60
+            print(f"[{datetime.now(KST):%H:%M}] 개장까지 {int(left)}분 · "
+                  f"감시 {len(store)}종목 · 명령 대기 중", flush=True)
         time.sleep(3)
 
     if mk == "kr":
