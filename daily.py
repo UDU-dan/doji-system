@@ -118,6 +118,7 @@ def main():
     df = pd.DataFrame(rows)
     df.to_csv(f"results/watchlist_{mk}.csv", index=False, encoding="utf-8-sig")
     wait = df[df["status"] == "대기"]
+    hold = df[df["status"] == "보류"]
     if len(wait) == 0:
         msg = f"[{'국장' if mk == 'kr' else '미장'}] 대기 중 후보 0건 (전체 {len(df)}건)"
         print(msg)
@@ -137,8 +138,11 @@ def main():
 
     base = df["date"].max()
     L = [f"[{base} 관심종목 · {'국장' if mk == 'kr' else '미장'}]",
-         f"대기 후보 {len(wait)}건 중 상위 {len(ranked)}",
+         f"대기 {len(wait)}건 중 상위 {len(ranked)} · 보류 {len(hold)}건",
          f"시장국면: {regime}",
+         f"필터: 유동성 {VF.STATS['liquidity']}/{VF.STATS['total']} · "
+         f"도지 {VF.STATS['doji']} · 저항선 {VF.STATS['peaks']} · "
+         f"손절폭 {VF.STATS['stopwidth']}",
          "",
          "진입=저항 돌파시 / 익절=1R 절반정리 후 손절을 진입가로", ""]
 
@@ -153,6 +157,13 @@ def main():
                  f"거래대금 {r['value']}{unit}")
         for nw in r.get("news", []):
             L.append(f"  · {nw}")
+
+    if len(hold):
+        L.append("")
+        L.append("━━ 보류 (손절선 아래 · 복귀시 부활) ━━")
+        for _, r in hold.head(8).iterrows():
+            L.append(f"{r['name'][:14]} [{r['pattern']}] 진입 {r['entry']:,} "
+                     f"· 현재 {r['last']:,}")
 
     txt = "\n".join(L)
     print("\n" + txt)
