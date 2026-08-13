@@ -38,19 +38,26 @@ def bio_codes_kr():
         df.columns = [str(x) for x in df.columns]
         cc = next((x for x in df.columns if x.lower() in ("code", "symbol")), None)
         nc = next((x for x in df.columns if x.lower() == "name"), None)
+        skip = {"code", "symbol", "name", "market", "markettype",
+                "marcap", "stocks", "amount", "close", "changes", "changescode"}
         sec = [x for x in df.columns
-               if x.lower() in ("sector", "industry", "industryname", "업종")]
+               if x.lower() not in skip and df[x].dtype == object]
         if cc is None:
             return out
         for _, r in df.iterrows():
             txt = " ".join(str(r[x]) for x in sec if pd.notna(r.get(x, None)))
             nm = str(r[nc]) if nc else ""
             if any(w in txt for w in BIO_SECTOR) or any(w in nm for w in BIO_WORDS):
-                out.add(str(r[cc]).strip().upper()
-                        .replace(".KS", "").replace(".KQ", "").zfill(6))
+                out.add(_norm(r[cc]))
     except Exception as ex:
         print(f"      업종 조회 실패({ex}) - 이름 기준만 적용")
     return out
+
+
+def _norm(x):
+    """종목코드 표준화 (6자리 문자열)"""
+    return (str(x).strip().upper()
+            .replace(".KS", "").replace(".KQ", "").replace("A", "").zfill(6))
 
 
 def is_bio(name, sector=""):
@@ -75,11 +82,15 @@ def main():
     if mk == "kr" and a.no_bio:
         before = len(uni)
         bio = bio_codes_kr()
-        def _norm(x):
-            return str(x).strip().upper().replace(".KS", "").replace(".KQ", "").zfill(6)
+        uni_codes = {_norm(u[0]) for u in uni}
+        hit = uni_codes & bio
+        print(f"      업종기준 {len(bio)}종목 식별 · 유니버스와 교집합 {len(hit)}",
+              flush=True)
+        if bio and not hit:
+            print(f"      [경고] 코드 형식 불일치 예시 "
+                  f"bio={list(bio)[:3]} uni={list(uni_codes)[:3]}", flush=True)
         uni = [u for u in uni if _norm(u[0]) not in bio and not is_bio(u[1])]
-        print(f"      제약·바이오 {before - len(uni)}종목 제외 "
-              f"(업종기준 {len(bio)}종목 식별)", flush=True)
+        print(f"      제약·바이오 {before - len(uni)}종목 제외", flush=True)
     print(f"      {len(uni)}종목", flush=True)
 
     print(f"[2/4] 일봉 수집 · 최근 {a.days}일 판정...", flush=True)
@@ -151,7 +162,7 @@ def main():
 
     for k, r in enumerate(ranked, 1):
         L.append(f"\n{k}위 {r['name'][:18]} ({r['code']})  {r['score']}점")
-        L.append(f"  [{r['pattern']}] · 신호 {r['date']}")
+        L.append(f"  [{r['pattern']}] · 신호 {r['date']}{VF.age_tag(r)}")
         for p in r["points"]:
             L.append(f"    · {p}")
         L.append(f"  진입 {r['entry']:,} · 익절 {r['tgt']:,} · "
@@ -164,9 +175,9 @@ def main():
     if len(hold):
         L.append("")
         L.append("━━ 보류 (손절선 아래 · 복귀시 부활) ━━")
-        for _, r in hold.head(8).iterrows():
+        for r in VF.merge_and_score(hold, mk)[:8]:
             L.append(f"{r['name'][:14]} [{r['pattern']}] 진입 {r['entry']:,} "
-                     f"· 현재 {r['last']:,}")
+                     f"· 현재 {r['last']:,} ({r['togo']:+.1f}%)")
 
     txt = "\n".join(L)
     print("\n" + txt)
