@@ -49,6 +49,15 @@ def bio_codes_kr():
             nm = str(r[nc]) if nc else ""
             if any(w in txt for w in BIO_SECTOR) or any(w in nm for w in BIO_WORDS):
                 out.add(_norm(r[cc]))
+        # 진단: 대형 바이오 몇 종목이 어떤 업종으로 분류되는지 확인
+        probe = {"196170": "알테오젠", "068270": "셀트리온",
+                 "207940": "삼성바이오로직스", "145020": "휴젤"}
+        for _, r in df.iterrows():
+            cd = _norm(r[cc])
+            if cd in probe:
+                txt = " | ".join(f"{x}={r[x]}" for x in sec
+                                 if pd.notna(r.get(x, None)))[:120]
+                print(f"      [진단] {probe[cd]}({cd}) {txt}", flush=True)
     except Exception as ex:
         print(f"      업종 조회 실패({ex}) - 이름 기준만 적용")
     return out
@@ -140,7 +149,22 @@ def main():
             f.write(msg)
         return
 
-    ranked = VF.merge_and_score(wait, mk)[:a.top]
+    all_ranked = VF.merge_and_score(wait, mk)
+    bio_set = bio_codes_kr() if mk == "kr" else set()
+    for r in all_ranked:
+        r["is_bio"] = (_norm(r["code"]) in bio_set) or is_bio(r["name"])
+
+    # 비바이오 기준으로 top개를 확보하되, 그 사이에 낀 바이오는 표시만 하고 유지
+    ranked, non_bio = [], 0
+    for r in all_ranked:
+        ranked.append(r)
+        if not r["is_bio"]:
+            non_bio += 1
+        if non_bio >= a.top:
+            break
+    nb = sum(1 for r in ranked if r["is_bio"])
+    if nb:
+        print(f"      바이오 {nb}종목 포함 - 뒤 순위에서 보충", flush=True)
 
     print("[3/4] 시장 국면...", flush=True)
     regime = SC.market_regime(mk)
@@ -152,7 +176,9 @@ def main():
 
     base = df["date"].max()
     L = [f"[{base} 관심종목 · {'국장' if mk == 'kr' else '미장'}]",
-         f"대기 {len(wait)}건 중 상위 {len(ranked)} · 보류 {len(hold)}건",
+         f"대기 {len(wait)}건 중 {len(ranked)}종목 "
+         f"(비바이오 {sum(1 for r in ranked if not r.get('is_bio'))}) · "
+         f"보류 {len(hold)}건",
          f"시장국면: {regime}",
          f"필터: 유동성 {VF.STATS['liquidity']}/{VF.STATS['total']} · "
          f"도지 {VF.STATS['doji']} · 저항선 {VF.STATS['peaks']} · "
@@ -161,7 +187,8 @@ def main():
          "진입=저항 돌파시 / 익절=1R 절반정리 후 손절을 진입가로", ""]
 
     for k, r in enumerate(ranked, 1):
-        L.append(f"\n{k}위 {r['name'][:18]} ({r['code']})  {r['score']}점")
+        tag = "  [바이오]" if r.get("is_bio") else ""
+        L.append(f"\n{k}위 {r['name'][:18]} ({r['code']})  {r['score']}점{tag}")
         L.append(f"  [{r['pattern']}] · 신호 {r['date']}{VF.age_tag(r)}")
         for p in r["points"]:
             L.append(f"    · {p}")
