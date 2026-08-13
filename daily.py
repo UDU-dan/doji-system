@@ -46,7 +46,8 @@ def bio_codes_kr():
             txt = " ".join(str(r[x]) for x in sec if pd.notna(r.get(x, None)))
             nm = str(r[nc]) if nc else ""
             if any(w in txt for w in BIO_SECTOR) or any(w in nm for w in BIO_WORDS):
-                out.add(str(r[cc]).zfill(6))
+                out.add(str(r[cc]).strip().upper()
+                        .replace(".KS", "").replace(".KQ", "").zfill(6))
     except Exception as ex:
         print(f"      업종 조회 실패({ex}) - 이름 기준만 적용")
     return out
@@ -74,7 +75,9 @@ def main():
     if mk == "kr" and a.no_bio:
         before = len(uni)
         bio = bio_codes_kr()
-        uni = [u for u in uni if u[0] not in bio and not is_bio(u[1])]
+        def _norm(x):
+            return str(x).strip().upper().replace(".KS", "").replace(".KQ", "").zfill(6)
+        uni = [u for u in uni if _norm(u[0]) not in bio and not is_bio(u[1])]
         print(f"      제약·바이오 {before - len(uni)}종목 제외 "
               f"(업종기준 {len(bio)}종목 식별)", flush=True)
     print(f"      {len(uni)}종목", flush=True)
@@ -83,7 +86,7 @@ def main():
     rows, done = [], 0
     if mk == "kr":
         end = datetime.today()
-        s = (end - timedelta(days=400)).strftime("%Y-%m-%d")
+        s = (end - timedelta(days=2000)).strftime("%Y-%m-%d")
         e = end.strftime("%Y-%m-%d")
         with ThreadPoolExecutor(max_workers=a.workers) as ex:
             futs = {ex.submit(SC.fetch_kr, c, s, e): (c, n, m) for c, n, m in uni}
@@ -100,7 +103,7 @@ def main():
         meta = {c: n for c, n, _ in uni}
         syms = list(meta.keys())
         for k in range(0, len(syms), 150):
-            for t, dd in SC.fetch_us_batch(syms[k:k + 150], period="2y").items():
+            for t, dd in SC.fetch_us_batch(syms[k:k + 150], period="5y").items():
                 try:
                     rows.extend(VF.analyze(dd, t, meta.get(t, t), mk, a.days))
                 except Exception:
