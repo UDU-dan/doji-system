@@ -1,1 +1,37 @@
-{}
+{
+  "035420": {
+    "name": "NAVER",
+    "price": 234500.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr"
+  },
+  "010060": {
+    "name": "OCI홀딩스",
+    "price": 294500.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr"
+  },
+  "073240": {
+    "name": "금호타이어",
+    "price": 8360.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr"
+  },
+  "005950": {
+    "name": "이수화학",
+    "price": 15770.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr"
+  },
+  "127120": {
+    "name": "제이에스링크",
+    "price": 41250.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr"
+  }
+}
