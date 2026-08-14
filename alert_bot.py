@@ -43,6 +43,7 @@ POLL_US = 60             # 미장 폴링 주기(초)
 
 TOKEN = os.environ.get("ALERT_TOKEN", "")
 CHAT = os.environ.get("ALERT_CHAT_ID", "")
+LIVE = {}          # 현재 세션에서 감시 중인 종목 (메모리 최신값)
 
 
 # ══════════ 텔레그램 ══════════
@@ -96,6 +97,16 @@ def load_store():
 def save_store(d):
     with open(STORE, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
+
+
+_last_save = [0.0]
+
+
+def periodic_save(store, interval=30):
+    """알림이 없어도 주기적으로 현재값을 파일에 반영"""
+    if time.time() - _last_save[0] >= interval:
+        _last_save[0] = time.time()
+        merge_save(store)
 
 
 def merge_save(store):
@@ -287,6 +298,7 @@ def handle(text, store, market, pending):
         save_store(allst)
         if mkt == market:
             store[c["code"]] = allst[c["code"]]
+            LIVE[c["code"]] = allst[c["code"]]
             note = "감시 시작"
         else:
             note = ("국장 종목 - 다음 국장 세션(09:00)부터 감시"
@@ -323,6 +335,7 @@ def handle(text, store, market, pending):
                 continue
             L.append(f"\n[{lbl} {len(grp)}종목]")
             for c, v in grp.items():
+                v = LIVE.get(c, v)              # 메모리 최신값 우선
                 live = "●" if mm == market else "○"
                 L.append(f"\n{live} {v['name']} ({c})  {v.get('state', '대기')}")
                 L.append(f"   지정가 {fmt_price(v['price'], mm)}"
@@ -344,6 +357,7 @@ def handle(text, store, market, pending):
             return "등록된 종목이 없습니다."
         L = [f"등록 {len(allst)}종목 (현재 {'국장' if market == 'kr' else '미장'} 세션)"]
         for code, v in allst.items():
+            v = LIVE.get(code, v)
             m = v.get("market", "kr")
             live = "●" if m == market else "○"
             L.append(f"  {live} {v['name']} ({code}) "
@@ -358,6 +372,7 @@ def handle(text, store, market, pending):
                     (sym and sym.upper() == code.upper()):
                 allst.pop(code)
                 store.pop(code, None)
+                LIVE.pop(code, None)
                 save_store(allst)
                 return f"해제 완료\n{v['name']} ({code}) 감시 중단"
         return f"'{sym}' 을(를) 목록에서 찾지 못했습니다."
@@ -566,6 +581,8 @@ def main():
 
     allst = load_store()
     store = {k: v for k, v in allst.items() if v.get("market", "kr") == mk}
+    LIVE.clear()
+    LIVE.update(store)
 
     open_at, close_at = session_bounds(mk)
     label = "국장" if mk == "kr" else "미장"
@@ -612,6 +629,8 @@ def main():
         approval = get_approval(key, secret)
         subscribed = set()
         ws = None
+        recv = [0]
+        last_stat = 0.0
         while datetime.now(KST) < close_at and time.time() < hard:
             try:
                 if ws is None:
@@ -635,6 +654,7 @@ def main():
                     if raw[0] in ("0", "1"):
                         p = parse_trade(raw)
                         if p and p[0] in store:
+                            recv[0] += 1
                             m = check(p[0], store[p[0]], p[1], store)
                             if m:
                                 tg(m)
@@ -645,6 +665,12 @@ def main():
                                 ws.send(raw)
                         except Exception:
                             pass
+                periodic_save(store)
+                if time.time() - last_stat > 120:
+                    last_stat = time.time()
+                    got = sum(1 for v in store.values() if v.get("last_px"))
+                    print(f"[{datetime.now(KST):%H:%M}] 체결수신 {recv[0]}건 · "
+                          f"시세확보 {got}/{len(store)}종목", flush=True)
             except Exception as ex:
                 print("연결 오류:", ex, flush=True)
                 try:
@@ -668,6 +694,7 @@ def main():
                         m = check(code, store[code], px, store)
                         if m:
                             tg(m)
+                periodic_save(store)
             time.sleep(2)
 
     stop_flag["stop"] = True
