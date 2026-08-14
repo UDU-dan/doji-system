@@ -33,5 +33,12 @@
     "state": "대기",
     "notified": [],
     "market": "kr"
+  },
+  "006360": {
+    "name": "GS건설",
+    "price": 35750.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr"
   }
 }
