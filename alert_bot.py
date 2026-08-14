@@ -637,11 +637,17 @@ def main():
         recv = [0]
         last_stat = last_retry = 0.0
         warned = set()
+        fail_msg = {}          # 종목 -> KIS 실패 사유
+        total_sub = [0]
 
         def subscribe(code):
+            if total_sub[0] >= 38:          # KIS 세션당 등록 한도(41) 여유분
+                return False
             ws.send(sub_msg(approval, code))
             sub_sent[code] = sub_sent.get(code, 0) + 1
-            time.sleep(0.08)
+            total_sub[0] += 1
+            time.sleep(0.12)
+            return True
 
         while datetime.now(KST) < close_at and time.time() < hard:
             try:
@@ -651,6 +657,7 @@ def main():
                     ws.settimeout(1)
                     sub_sent.clear()
                     sub_ok.clear()
+                    total_sub[0] = 0
                     for c in list(store):
                         subscribe(c)
                     print(f"[{datetime.now(KST):%H:%M}] 연결 · "
@@ -693,33 +700,47 @@ def main():
                             if h.get("tr_id") == "PINGPONG":
                                 ws.send(raw)
                             else:
-                                body = j.get("body", {})
-                                key_ = h.get("tr_key") or \
-                                    body.get("output", {}).get("key")
-                                if body.get("msg1", "").upper().startswith("SUBSCRIBE"):
-                                    if key_:
-                                        sub_ok.add(key_)
-                        except Exception:
-                            pass
+                                body = j.get("body", {}) or {}
+                                key_ = h.get("tr_key")
+                                m1 = str(body.get("msg1", "")).upper()
+                                rt = str(body.get("rt_cd", ""))
+                                # KIS 응답 전문 로그 (원인 추적용)
+                                print(f"[KIS] key={key_} rt={rt} msg={m1[:60]}",
+                                      flush=True)
+                                ok_words = ("SUBSCRIBE SUCCESS",
+                                            "ALREADY IN SUBSCRIBE",
+                                            "OPSP0000", "OPSP0002")
+                                if key_ and (rt == "0" or
+                                             any(w in m1 for w in ok_words)):
+                                    sub_ok.add(key_)
+                                elif key_:
+                                    fail_msg[key_] = m1[:60]
+                        except Exception as ex:
+                            print(f"[KIS] 응답 파싱 실패: {str(raw)[:120]} ({ex})",
+                                  flush=True)
 
-                # ── 미확인 종목 재구독 (20초마다) ──
-                if time.time() - last_retry > 20:
+                # ── 미확인 종목 재구독 (60초마다, 최대 2회) ──
+                if time.time() - last_retry > 60:
                     last_retry = time.time()
                     pend = [c for c in store if c not in sub_ok]
                     for c in pend:
-                        if sub_sent.get(c, 0) < 5:
+                        if sub_sent.get(c, 0) < 2:
                             subscribe(c)
                         elif c not in warned:
                             warned.add(c)
+                            why = fail_msg.get(c, "응답 없음")
                             tg(f"[구독 실패] {store[c]['name']} ({c})\n"
-                               f"시세를 받지 못하고 있습니다. 종목코드를 확인하거나 "
-                               f"해제 후 다시 등록해주세요.")
+                               f"사유: {why}\n"
+                               f"해제 후 다시 등록하거나 재시작해주세요.")
 
                 periodic_save(store)
                 if time.time() - last_stat > 120:
                     last_stat = time.time()
+                    miss = [c for c in store if c not in sub_ok]
                     print(f"[{datetime.now(KST):%H:%M}] 체결수신 {recv[0]}건 · "
-                          f"구독확인 {len(sub_ok)}/{len(store)}종목", flush=True)
+                          f"구독확인 {len(sub_ok)}/{len(store)} · "
+                          f"요청누적 {total_sub[0]}"
+                          + (f" · 미확인 {miss}" if miss else ""), flush=True)
 
             except Exception as ex:
                 print("연결 오류:", ex, flush=True)
