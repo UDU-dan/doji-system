@@ -1,4 +1,4 @@
-name: 지정가 감시 봇
+name: 지정가 감시 봇 (미장)
 
 on:
   workflow_dispatch:
@@ -6,18 +6,17 @@ on:
       market:
         description: '시장'
         required: true
-        default: 'kr'
+        default: 'us'
         type: choice
-        options: ['kr', 'us']
+        options: ['us', 'kr']
   schedule:
-    - cron: '40 23 * * 0-4'
     - cron: '50 12 * * 1-5'
 
 permissions:
   contents: write
 
 env:
-  MK: ${{ github.event.inputs.market || (github.event.schedule == '50 12 * * 1-5' && 'us' || 'kr') }}
+  MK: ${{ github.event.inputs.market || 'us' }}
 
 jobs:
   alert:
