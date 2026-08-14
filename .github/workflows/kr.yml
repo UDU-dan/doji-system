@@ -1,0 +1,62 @@
+name: 국장 통합 감시
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: '최근 며칠 신호까지'
+        required: true
+        default: '5'
+      universe:
+        description: '대상 종목 수'
+        required: true
+        default: '800'
+  schedule:
+    - cron: '0 23 * * 0-4'
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 420
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: 관심종목 생성
+        env:
+          TG_TOKEN: ${{ secrets.ALERT_TOKEN }}
+          TG_CHAT: ${{ secrets.ALERT_CHAT_ID }}
+        run: mkdir -p results && python daily.py --market kr --days ${{ github.event.inputs.days || '5' }} --universe ${{ github.event.inputs.universe || '800' }} 2>&1 | tee results/scan_log.txt
+
+      - name: 리스트 발송
+        env:
+          TG_TOKEN: ${{ secrets.ALERT_TOKEN }}
+          TG_CHAT: ${{ secrets.ALERT_CHAT_ID }}
+        run: bash notify.sh kr watchlist
+
+      - name: 통합 감시
+        env:
+          ALERT_TOKEN: ${{ secrets.ALERT_TOKEN }}
+          ALERT_CHAT_ID: ${{ secrets.ALERT_CHAT_ID }}
+          KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+          KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+        run: python kr_watch.py
+
+      - name: 감시목록 저장
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f manual_watch.json || true
+          git diff --staged --quiet || git commit -m "감시목록 $(date +'%Y-%m-%d %H:%M')"
+          git pull --rebase --autostash origin ${{ github.ref_name }} || true
+          git push || true
