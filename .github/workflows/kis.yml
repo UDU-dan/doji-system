@@ -1,4 +1,4 @@
-name: 국장 실시간 감시
+name: 국장 실시간 감시 (구버전)
 
 on:
   workflow_dispatch:
@@ -11,8 +11,6 @@ on:
         description: '대상 종목 수'
         required: true
         default: '800'
-  schedule:
-    - cron: '50 23 * * 0-4'
 
 permissions:
   contents: read
