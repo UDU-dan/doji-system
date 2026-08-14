@@ -4,28 +4,27 @@
     "price": 234500.0,
     "state": "보류",
     "notified": [],
-    "market": "kr"
+    "market": "kr",
+    "last_px": 226500.0,
+    "last_at": "08/14 13:02:51"
   },
   "010060": {
     "name": "OCI홀딩스",
     "price": 294500.0,
     "state": "보류",
     "notified": [],
-    "market": "kr"
+    "market": "kr",
+    "last_px": 273500.0,
+    "last_at": "08/14 13:02:54"
   },
   "073240": {
     "name": "금호타이어",
     "price": 8360.0,
     "state": "보류",
     "notified": [],
-    "market": "kr"
-  },
-  "005950": {
-    "name": "이수화학",
-    "price": 15770.0,
-    "state": "대기",
-    "notified": [],
-    "market": "kr"
+    "market": "kr",
+    "last_px": 7980.0,
+    "last_at": "08/14 13:02:51"
   },
   "127120": {
     "name": "제이에스링크",
@@ -59,6 +58,17 @@
     "notified": [],
     "market": "kr",
     "added": "08/14 12:37",
+    "last_px": null,
+    "last_at": null,
+    "events": []
+  },
+  "005950": {
+    "name": "이수화학",
+    "price": 15770.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr",
+    "added": "08/14 12:56",
     "last_px": null,
     "last_at": null,
     "events": []
