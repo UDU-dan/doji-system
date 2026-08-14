@@ -5,8 +5,8 @@
     "state": "보류",
     "notified": [],
     "market": "kr",
-    "last_px": 226500.0,
-    "last_at": "08/14 13:02:51"
+    "last_px": 227500.0,
+    "last_at": "08/14 13:27:23"
   },
   "010060": {
     "name": "OCI홀딩스",
@@ -14,8 +14,8 @@
     "state": "보류",
     "notified": [],
     "market": "kr",
-    "last_px": 273500.0,
-    "last_at": "08/14 13:02:54"
+    "last_px": 273000.0,
+    "last_at": "08/14 13:27:23"
   },
   "073240": {
     "name": "금호타이어",
@@ -23,22 +23,8 @@
     "state": "보류",
     "notified": [],
     "market": "kr",
-    "last_px": 7980.0,
-    "last_at": "08/14 13:02:51"
-  },
-  "127120": {
-    "name": "제이에스링크",
-    "price": 41250.0,
-    "state": "대기",
-    "notified": [],
-    "market": "kr"
-  },
-  "006360": {
-    "name": "GS건설",
-    "price": 35750.0,
-    "state": "대기",
-    "notified": [],
-    "market": "kr"
+    "last_px": 8030.0,
+    "last_at": "08/14 13:27:23"
   },
   "417200": {
     "name": "LS머트리얼즈",
@@ -69,6 +55,28 @@
     "notified": [],
     "market": "kr",
     "added": "08/14 12:56",
+    "last_px": null,
+    "last_at": null,
+    "events": []
+  },
+  "127120": {
+    "name": "제이에스링크",
+    "price": 41250.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr",
+    "added": "08/14 13:08",
+    "last_px": null,
+    "last_at": null,
+    "events": []
+  },
+  "006360": {
+    "name": "GS건설",
+    "price": 35750.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr",
+    "added": "08/14 13:09",
     "last_px": null,
     "last_at": null,
     "events": []
