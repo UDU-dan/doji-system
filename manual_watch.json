@@ -40,5 +40,27 @@
     "state": "대기",
     "notified": [],
     "market": "kr"
+  },
+  "417200": {
+    "name": "LS머트리얼즈",
+    "price": 12660.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr",
+    "added": "08/14 12:36",
+    "last_px": null,
+    "last_at": null,
+    "events": []
+  },
+  "036540": {
+    "name": "SFA반도체",
+    "price": 6480.0,
+    "state": "대기",
+    "notified": [],
+    "market": "kr",
+    "added": "08/14 12:37",
+    "last_px": null,
+    "last_at": null,
+    "events": []
   }
 }
