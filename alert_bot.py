@@ -25,6 +25,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
@@ -77,6 +78,11 @@ def tg_updates(offset):
 
 
 # ══════════ 저장 ══════════
+def fmt_price(x, market):
+    """국장은 원 단위 정수, 미장은 달러 소수 2자리"""
+    return f"{x:,.0f}원" if market == "kr" else f"${x:,.2f}"
+
+
 def load_store():
     if os.path.exists(STORE):
         try:
@@ -157,7 +163,7 @@ def find_stock(q, market=None):
         for c, n in kr_list():
             if c == q:
                 return [(c, n, "kr")]
-        return [(q, q, "kr")]
+        return []                       # 목록에 없는 코드는 등록 거부
 
     qu = q.upper()
     # 미장: 티커 정확 일치
@@ -166,12 +172,12 @@ def find_stock(q, market=None):
             out.append((sym, nm, "us"))
             break
 
-    # 국장: 이름 정확 일치 -> 부분 일치
-    exact = [(c, n, "kr") for c, n in kr_list() if n == q]
+    # 국장: 이름 정확 일치(대소문자 무시) -> 부분 일치
+    exact = [(c, n, "kr") for c, n in kr_list() if n.upper() == qu]
     if exact:
         out += exact
     else:
-        out += [(c, n, "kr") for c, n in kr_list() if q in n][:4]
+        out += [(c, n, "kr") for c, n in kr_list() if qu in n.upper()][:4]
 
     # 미장: 회사명 부분 일치
     if len(out) < 5:
@@ -183,15 +189,17 @@ def find_stock(q, market=None):
             if len(out) >= 5:
                 break
 
-    # 아무것도 없고 영문이면 미장 티커로 간주
-    if not out and re.fullmatch(r"[A-Za-z.\-]{1,6}", q):
+    # 아무것도 없고 순수 영문 1~5자면 미장 티커로 간주
+    if not out and re.fullmatch(r"[A-Za-z.\-]{1,5}", q):
         return [(qu, qu, "us")]
     return out[:5]
 
 
 # ══════════ 명령 해석 ══════════
 DEL_WORDS = ("해제", "삭제", "빼", "취소", "제거", "그만", "중단")
-LIST_WORDS = ("목록", "리스트", "확인", "보여", "뭐 ", "뭐보", "감시중")
+LIST_WORDS = ("목록", "리스트", "감시중")
+STATUS_WORDS = ("상황", "상태", "현황", "어때", "어떻게", "어떻노", "됐어",
+                "됐나", "진행", "체크")
 # 종목명에서 걷어낼 말들 (긴 것부터)
 # 종목명 뒤에 붙을 수 있는 조사·어미 (첫 토큰 끝에서만 제거)
 TAIL = ("으로", "원에", "에서", "까지", "부터", "이랑", "하고", "원")
@@ -236,6 +244,8 @@ def parse_cmd(text):
         return ("no", None, None)
     if re.fullmatch(r"[1-5]", t):
         return ("pick", t, None)
+    if any(w in t for w in STATUS_WORDS) and not re.search(r"\d{3}", t):
+        return ("status", None, None)
     if any(w in t for w in LIST_WORDS) and not re.search(r"\d{3}", t):
         return ("list", None, None)
 
@@ -268,8 +278,12 @@ def handle(text, store, market, pending):
         c = pending["cand"]
         mkt = c.get("market", market)
         allst = load_store()
-        allst[c["code"]] = dict(name=c["name"], price=c["price"],
-                                state="대기", notified=[], market=mkt)
+        old = allst.get(c["code"], {})
+        allst[c["code"]] = dict(
+            name=c["name"], price=c["price"], state="대기", notified=[],
+            market=mkt,
+            added=old.get("added") or datetime.now(KST).strftime("%m/%d %H:%M"),
+            last_px=None, last_at=None, events=[])
         save_store(allst)
         if mkt == market:
             store[c["code"]] = allst[c["code"]]
@@ -278,8 +292,8 @@ def handle(text, store, market, pending):
             note = ("국장 종목 - 다음 국장 세션(09:00)부터 감시"
                     if mkt == "kr" else "미장 종목 - 다음 미장 세션부터 감시")
         pending.clear()
-        px = f"{c['price']:,.0f}" if mkt == "kr" else f"{c['price']:,.2f}"
-        return f"등록 완료\n{c['name']} ({c['code']}) {px}\n{note}"
+        return (f"등록 완료\n{c['name']} ({c['code']}) "
+                f"{fmt_price(c['price'], mkt)}\n{note}")
 
     if act == "no":
         pending.clear()
@@ -293,11 +307,36 @@ def handle(text, store, market, pending):
             pending["cand"] = dict(code=code, name=name,
                                    price=pending["price"], market=mkt)
             pending.pop("options", None)
-            px = (f"{pending['price']:,.0f}" if mkt == "kr"
-                  else f"{pending['price']:,.2f}")
             lbl = "국장" if mkt == "kr" else "미장"
-            return f"{name} ({code}) · {lbl}\n{px} 등록할까요?\n네 / 아니오"
+            return (f"{name} ({code}) · {lbl}\n"
+                    f"{fmt_price(pending['price'], mkt)} 등록할까요?\n네 / 아니오")
         return "번호를 다시 선택해주세요."
+
+    if act == "status":
+        allst = load_store()
+        if not allst:
+            return "등록된 종목이 없습니다."
+        L = [f"[현재 상황] {datetime.now(KST):%m/%d %H:%M:%S} KST"]
+        for lbl, mm in (("국장", "kr"), ("미장", "us")):
+            grp = {k: v for k, v in allst.items() if v.get("market", "kr") == mm}
+            if not grp:
+                continue
+            L.append(f"\n[{lbl} {len(grp)}종목]")
+            for c, v in grp.items():
+                live = "●" if mm == market else "○"
+                L.append(f"\n{live} {v['name']} ({c})  {v.get('state', '대기')}")
+                L.append(f"   지정가 {fmt_price(v['price'], mm)}"
+                         f" · 등록 {v.get('added', '-')}")
+                lp = v.get("last_px")
+                if lp:
+                    d = (lp - v["price"]) / v["price"] * 100
+                    L.append(f"   현재 {fmt_price(lp, mm)} ({d:+.2f}%)"
+                             f" · {v.get('last_at', '')}")
+                else:
+                    L.append("   현재 시세 미수신")
+                for e in v.get("events", [])[-3:]:
+                    L.append(f"   · {e}")
+        return "\n".join(L)
 
     if act == "list":
         allst = load_store()
@@ -306,9 +345,9 @@ def handle(text, store, market, pending):
         L = [f"등록 {len(allst)}종목 (현재 {'국장' if market == 'kr' else '미장'} 세션)"]
         for code, v in allst.items():
             m = v.get("market", "kr")
-            px = f"{v['price']:,.0f}" if m == "kr" else f"{v['price']:,.2f}"
             live = "●" if m == market else "○"
-            L.append(f"  {live} {v['name']} ({code}) {px} · {v['state']}")
+            L.append(f"  {live} {v['name']} ({code}) "
+                     f"{fmt_price(v['price'], m)} · {v['state']}")
         L.append("\n● 지금 감시 중 · ○ 해당 시장 개장시 감시")
         return "\n".join(L)
 
@@ -338,10 +377,10 @@ def handle(text, store, market, pending):
         pending["cand"] = dict(code=code, name=name, price=price, market=mkt)
         allst = load_store()
         old = allst.get(code)
-        px = f"{price:,.0f}" if mkt == "kr" else f"{price:,.2f}"
-        pre = (f"현재 {old['price']:,.2f} → " if old else "")
+        pre = (f"현재 {fmt_price(old['price'], mkt)} → " if old else "")
         lbl = "국장" if mkt == "kr" else "미장"
-        return f"{name} ({code}) · {lbl}\n{pre}{px} 등록할까요?\n네 / 아니오"
+        return (f"{name} ({code}) · {lbl}\n"
+                f"{pre}{fmt_price(price, mkt)} 등록할까요?\n네 / 아니오")
 
     if act == "query":
         found = find_stock(sym)
@@ -361,7 +400,10 @@ def check(code, v, px, store):
     name, notified = v["name"], v.get("notified", [])
     diff = (px - target) / target * 100
     ts = datetime.now(KST).strftime("%H:%M:%S")
-    fmt = (lambda x: f"{x:,.0f}") if v.get("market", "kr") == "kr" else (lambda x: f"{x:,.2f}")
+    _m = v.get("market", "kr")
+    fmt = lambda x: fmt_price(x, _m)
+    v["last_px"] = px
+    v["last_at"] = datetime.now(KST).strftime("%m/%d %H:%M:%S")
     msg = None
 
     if px == target and "도달" not in notified:
@@ -396,6 +438,10 @@ def check(code, v, px, store):
 
     v["notified"] = notified
     if msg:
+        kind = msg.split("]")[0].lstrip("[")
+        ev = v.setdefault("events", [])
+        ev.append(f"{datetime.now(KST):%m/%d %H:%M:%S} {kind} {fmt(px)}")
+        v["events"] = ev[-8:]              # 최근 8건만 보관
         merge_save(store)
     return msg
 
@@ -468,6 +514,48 @@ def session_bounds(market):
     return (datetime.combine(day, o, tz), datetime.combine(day, c, tz))
 
 
+def summary_text(store_all, market, title):
+    """등록 종목 요약 (국장/미장 구분)"""
+    L = [title]
+    kr = {k: v for k, v in store_all.items() if v.get("market", "kr") == "kr"}
+    us = {k: v for k, v in store_all.items() if v.get("market") == "us"}
+    for lbl, grp, mm in (("국장", kr, "kr"), ("미장", us, "us")):
+        if not grp:
+            continue
+        L.append(f"\n[{lbl} {len(grp)}종목]")
+        for c, v in grp.items():
+            line = (f"  {v['name']} ({c}) {fmt_price(v['price'], mm)} "
+                    f"· {v.get('state', '대기')}")
+            if v.get("added"):
+                line += f" · 등록 {v['added']}"
+            L.append(line)
+            lp = v.get("last_px")
+            if lp:
+                d = (lp - v["price"]) / v["price"] * 100
+                L.append(f"     현재 {fmt_price(lp, mm)} ({d:+.2f}%)"
+                         f" {v.get('last_at', '')}")
+    if not kr and not us:
+        L.append("\n등록된 종목 없음")
+    return "\n".join(L)
+
+
+def bot_loop(store, market, stop_flag):
+    """텔레그램 명령 처리 (별도 스레드). 웹소켓과 무관하게 즉시 응답."""
+    pending = {}
+    offset = 0
+    _, offset = tg_updates(0)          # 이전 메시지 건너뛰기
+    while not stop_flag["stop"]:
+        try:
+            msgs, offset = tg_updates(offset)
+            for m in msgs:
+                resp = handle(m, store, market, pending)
+                if resp:
+                    tg(resp)
+        except Exception as ex:
+            print("봇 루프 오류:", ex, flush=True)
+        time.sleep(1)
+
+
 # ══════════ 메인 ══════════
 def main():
     ap = argparse.ArgumentParser()
@@ -476,64 +564,59 @@ def main():
     a = ap.parse_args()
     mk = a.market
 
-    store = load_store()
-    store = {k: v for k, v in store.items() if v.get("market", "kr") == mk}
-    pending = {}
-    offset = 0
-    _, offset = tg_updates(0)          # 이전 메시지 건너뛰기
+    allst = load_store()
+    store = {k: v for k, v in allst.items() if v.get("market", "kr") == mk}
 
     open_at, close_at = session_bounds(mk)
     label = "국장" if mk == "kr" else "미장"
     hard = time.time() + a.max_minutes * 60
 
-    L = [f"[{label} 지정가 감시] {datetime.now(KST):%m/%d %H:%M} KST",
-         f"다음 개장 {open_at.astimezone(KST):%m/%d %H:%M} · "
-         f"마감 {close_at.astimezone(KST):%H:%M} KST"]
-    allst = load_store()
-    if allst:
-        L.append(f"\n등록 {len(allst)}종목 (● 지금 감시 · ○ 대기)")
-        for c, v in allst.items():
-            m = v.get("market", "kr")
-            px = f"{v['price']:,.0f}" if m == "kr" else f"{v['price']:,.2f}"
-            L.append(f"  {'●' if m == mk else '○'} {v['name']} ({c}) {px}")
-    else:
-        L.append("\n등록된 종목 없음")
-    L.append("\n등록: 종목명 또는 티커 + 가격")
-    L.append("예) 삼성전자 71900 / NVDA 182.5 / 목록 / 해제")
-    tg("\n".join(L))
-    print("\n".join(L), flush=True)
+    # 종목 목록 미리 로드 (첫 명령 응답을 빠르게)
+    kr_list()
+    us_list()
 
-    # 개장 대기 (그동안에도 명령은 받는다)
+    head = (f"[{label} 지정가 감시] {datetime.now(KST):%m/%d %H:%M} KST\n"
+            f"다음 개장 {open_at.astimezone(KST):%m/%d %H:%M} · "
+            f"마감 {close_at.astimezone(KST):%H:%M} KST")
+    tg(summary_text(allst, mk, head) +
+       "\n\n등록: 종목명 또는 티커 + 가격"
+       "\n예) 삼성전자 71900 / NVDA 182.5 / 목록 / GS건설 해제")
+
+    # 텔레그램 처리 스레드 시작 (개장 전에도 등록 가능)
+    stop_flag = {"stop": False}
+    th = threading.Thread(target=bot_loop, args=(store, mk, stop_flag), daemon=True)
+    th.start()
+
+    # 개장 대기
     last_log = 0
     while datetime.now(KST) < open_at and time.time() < hard:
-        msgs, offset = tg_updates(offset)
-        for m in msgs:
-            resp = handle(m, store, mk, pending)
-            if resp:
-                tg(resp)
         if time.time() - last_log > 600:
             last_log = time.time()
             left = (open_at - datetime.now(KST)).total_seconds() / 60
             print(f"[{datetime.now(KST):%H:%M}] 개장까지 {int(left)}분 · "
-                  f"감시 {len(store)}종목 · 명령 대기 중", flush=True)
-        time.sleep(3)
+                  f"등록 {len(store)}종목", flush=True)
+        time.sleep(2)
+
+    if time.time() < hard:
+        tg(summary_text(load_store(), mk,
+                        f"[{label} 개장] {datetime.now(KST):%H:%M} KST · 감시 시작"))
 
     if mk == "kr":
         key = os.environ.get("KIS_APP_KEY", "")
         secret = os.environ.get("KIS_APP_SECRET", "")
         if not key or not secret:
             tg(f"[{label}] KIS 키 없음 - 종료")
+            stop_flag["stop"] = True
             return 1
         import websocket
         approval = get_approval(key, secret)
         subscribed = set()
         ws = None
-
         while datetime.now(KST) < close_at and time.time() < hard:
             try:
                 if ws is None:
                     ws = websocket.create_connection(WS_KR, timeout=30)
-                    ws.settimeout(2)
+                    ws.settimeout(1)
                     subscribed.clear()
                 for c in list(store):
                     if c not in subscribed:
@@ -544,7 +627,6 @@ def main():
                     if c not in store:
                         ws.send(sub_msg(approval, c, on=False))
                         subscribed.discard(c)
-
                 try:
                     raw = ws.recv()
                 except Exception:
@@ -563,12 +645,6 @@ def main():
                                 ws.send(raw)
                         except Exception:
                             pass
-
-                msgs, offset = tg_updates(offset)
-                for m in msgs:
-                    resp = handle(m, store, mk, pending)
-                    if resp:
-                        tg(resp)
             except Exception as ex:
                 print("연결 오류:", ex, flush=True)
                 try:
@@ -592,16 +668,12 @@ def main():
                         m = check(code, store[code], px, store)
                         if m:
                             tg(m)
-            msgs, offset = tg_updates(offset)
-            for m in msgs:
-                resp = handle(m, store, mk, pending)
-                if resp:
-                    tg(resp)
-            time.sleep(3)
+            time.sleep(2)
 
+    stop_flag["stop"] = True
     merge_save(store)
-    tg(f"[{label} 지정가 감시 종료] {datetime.now(KST):%H:%M} KST\n"
-       f"감시 {len(store)}종목 유지")
+    tg(summary_text(load_store(), mk,
+                    f"[{label} 감시 종료] {datetime.now(KST):%H:%M} KST"))
     return 0
 
 
