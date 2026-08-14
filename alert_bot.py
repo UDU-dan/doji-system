@@ -411,52 +411,56 @@ def handle(text, store, market, pending):
 # ══════════ 가격 판정 ══════════
 def check(code, v, px, store):
     """가격 변화에 따른 알림 문자열. 없으면 None"""
-    target = v["price"]
-    name, notified = v["name"], v.get("notified", [])
+    target = float(v["price"])
+    px = float(px)
+    name = v["name"]
+    notified = v.get("notified", [])
+    mkt = v.get("market", "kr")
+    fmt = lambda x: fmt_price(x, mkt)
     diff = (px - target) / target * 100
     ts = datetime.now(KST).strftime("%H:%M:%S")
-    _m = v.get("market", "kr")
-    fmt = lambda x: fmt_price(x, _m)
+
     v["last_px"] = px
     v["last_at"] = datetime.now(KST).strftime("%m/%d %H:%M:%S")
     msg = None
 
-    if px == target and "도달" not in notified:
-        notified.append("도달")
-        msg = (f"[도달] {name} ({code})\n"
-               f"지정가 {fmt(target)} · 현재 {fmt(px)}\n동일가격\n{ts} KST")
-
-    elif px > target and "돌파" not in notified:
-        notified.append("돌파")
+    if px < target:
+        # 지정가 아래 -> 보류 (상태가 바뀔 때만 알림)
+        if v.get("state") != "보류":
+            v["state"] = "보류"
+            v["notified"] = []
+            msg = (f"[보류] {name} ({code})\n"
+                   f"지정가 {fmt(target)} · 현재 {fmt(px)} ({diff:+.2f}%)\n"
+                   f"지정가 아래 - 복귀시 다시 알림\n{ts} KST")
+    elif px == target:
+        if v.get("state") == "보류":
+            notified = []                  # 복귀 -> 다시 알림
+        v["state"] = "도달"
+        if "도달" not in notified:
+            notified.append("도달")
+            msg = (f"[도달] {name} ({code})\n"
+                   f"지정가 {fmt(target)} · 현재 {fmt(px)}\n동일가격\n{ts} KST")
+    else:
+        if v.get("state") == "보류":
+            notified = []                  # 복귀 -> 다시 알림
         v["state"] = "돌파"
-        msg = (f"[돌파] {name} ({code})\n"
-               f"지정가 {fmt(target)} → 현재 {fmt(px)} ({diff:+.2f}%)\n{ts} KST")
-
-    elif (px > target * (1 + BREAK_EXTRA / 100)
-          and "돌파+" not in notified and "돌파" in notified):
-        notified.append("돌파+")
-        msg = (f"[추가상승] {name} ({code})\n"
-               f"지정가 {fmt(target)} → 현재 {fmt(px)} ({diff:+.2f}%)\n"
-               f"진입 구간 벗어남 - 눌림 대기 또는 가격 재설정\n{ts} KST")
-
-    elif px < target and v.get("state") != "보류":
-        v["state"] = "보류"
-        for k in ("도달", "돌파", "돌파+"):
-            if k in notified:
-                notified.remove(k)
-        msg = (f"[보류] {name} ({code})\n"
-               f"지정가 {fmt(target)} · 현재 {fmt(px)} ({diff:+.2f}%)\n"
-               f"지정가 아래 - 복귀시 다시 알림\n{ts} KST")
-
-    elif px >= target and v.get("state") == "보류":
-        v["state"] = "대기"
+        if "돌파" not in notified:
+            notified.append("돌파")
+            msg = (f"[돌파] {name} ({code})\n"
+                   f"지정가 {fmt(target)} → 현재 {fmt(px)} ({diff:+.2f}%)\n"
+                   f"{ts} KST")
+        elif diff >= BREAK_EXTRA and "돌파+" not in notified:
+            notified.append("돌파+")
+            msg = (f"[추가상승] {name} ({code})\n"
+                   f"지정가 {fmt(target)} → 현재 {fmt(px)} ({diff:+.2f}%)\n"
+                   f"진입 구간 벗어남 - 눌림 대기 또는 가격 재설정\n{ts} KST")
 
     v["notified"] = notified
     if msg:
         kind = msg.split("]")[0].lstrip("[")
         ev = v.setdefault("events", [])
         ev.append(f"{datetime.now(KST):%m/%d %H:%M:%S} {kind} {fmt(px)}")
-        v["events"] = ev[-8:]              # 최근 8건만 보관
+        v["events"] = ev[-8:]
         merge_save(store)
     return msg
 
@@ -627,50 +631,96 @@ def main():
             return 1
         import websocket
         approval = get_approval(key, secret)
-        subscribed = set()
         ws = None
+        sub_sent = {}          # 종목 -> 요청 보낸 횟수
+        sub_ok = set()         # 구독 확인된 종목
         recv = [0]
-        last_stat = 0.0
+        last_stat = last_retry = 0.0
+        warned = set()
+
+        def subscribe(code):
+            ws.send(sub_msg(approval, code))
+            sub_sent[code] = sub_sent.get(code, 0) + 1
+            time.sleep(0.08)
+
         while datetime.now(KST) < close_at and time.time() < hard:
             try:
+                # ── 연결 ──
                 if ws is None:
                     ws = websocket.create_connection(WS_KR, timeout=30)
                     ws.settimeout(1)
-                    subscribed.clear()
+                    sub_sent.clear()
+                    sub_ok.clear()
+                    for c in list(store):
+                        subscribe(c)
+                    print(f"[{datetime.now(KST):%H:%M}] 연결 · "
+                          f"구독요청 {len(sub_sent)}종목", flush=True)
+
+                # ── 신규 등록분 구독 / 해제분 정리 ──
                 for c in list(store):
-                    if c not in subscribed:
-                        ws.send(sub_msg(approval, c))
-                        subscribed.add(c)
-                        time.sleep(0.06)
-                for c in list(subscribed):
+                    if c not in sub_sent:
+                        subscribe(c)
+                for c in list(sub_sent):
                     if c not in store:
-                        ws.send(sub_msg(approval, c, on=False))
-                        subscribed.discard(c)
+                        try:
+                            ws.send(sub_msg(approval, c, on=False))
+                        except Exception:
+                            pass
+                        sub_sent.pop(c, None)
+                        sub_ok.discard(c)
+
+                # ── 수신 (타임아웃은 정상. 연결 유지) ──
                 try:
                     raw = ws.recv()
-                except Exception:
+                except websocket.WebSocketTimeoutException:
                     raw = None
+                except Exception:
+                    raise                      # 진짜 연결 오류만 재접속
+
                 if raw:
                     if raw[0] in ("0", "1"):
                         p = parse_trade(raw)
                         if p and p[0] in store:
                             recv[0] += 1
+                            sub_ok.add(p[0])   # 데이터 도착 = 구독 성공
                             m = check(p[0], store[p[0]], p[1], store)
                             if m:
                                 tg(m)
                     else:
                         try:
                             j = json.loads(raw)
-                            if j.get("header", {}).get("tr_id") == "PINGPONG":
+                            h = j.get("header", {})
+                            if h.get("tr_id") == "PINGPONG":
                                 ws.send(raw)
+                            else:
+                                body = j.get("body", {})
+                                key_ = h.get("tr_key") or \
+                                    body.get("output", {}).get("key")
+                                if body.get("msg1", "").upper().startswith("SUBSCRIBE"):
+                                    if key_:
+                                        sub_ok.add(key_)
                         except Exception:
                             pass
+
+                # ── 미확인 종목 재구독 (20초마다) ──
+                if time.time() - last_retry > 20:
+                    last_retry = time.time()
+                    pend = [c for c in store if c not in sub_ok]
+                    for c in pend:
+                        if sub_sent.get(c, 0) < 5:
+                            subscribe(c)
+                        elif c not in warned:
+                            warned.add(c)
+                            tg(f"[구독 실패] {store[c]['name']} ({c})\n"
+                               f"시세를 받지 못하고 있습니다. 종목코드를 확인하거나 "
+                               f"해제 후 다시 등록해주세요.")
+
                 periodic_save(store)
                 if time.time() - last_stat > 120:
                     last_stat = time.time()
-                    got = sum(1 for v in store.values() if v.get("last_px"))
                     print(f"[{datetime.now(KST):%H:%M}] 체결수신 {recv[0]}건 · "
-                          f"시세확보 {got}/{len(store)}종목", flush=True)
+                          f"구독확인 {len(sub_ok)}/{len(store)}종목", flush=True)
+
             except Exception as ex:
                 print("연결 오류:", ex, flush=True)
                 try:
@@ -684,6 +734,7 @@ def main():
                 ws.close()
             except Exception:
                 pass
+
     else:
         last = 0
         while datetime.now(NY) < close_at and time.time() < hard:
