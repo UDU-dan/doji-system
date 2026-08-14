@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import sys
 import threading
 import time
@@ -44,6 +45,43 @@ POLL_US = 60             # 미장 폴링 주기(초)
 TOKEN = os.environ.get("ALERT_TOKEN", "")
 CHAT = os.environ.get("ALERT_CHAT_ID", "")
 LIVE = {}          # 현재 세션에서 감시 중인 종목 (메모리 최신값)
+CLEANUP = {"ws": None, "approval": None, "codes": set()}
+
+
+def release_all(reason=""):
+    """등록된 실시간 구독을 KIS에 해제 요청. 강제 종료시에도 호출."""
+    ws = CLEANUP.get("ws")
+    ap = CLEANUP.get("approval")
+    codes = list(CLEANUP.get("codes") or [])
+    if not ws or not ap or not codes:
+        return
+    done = 0
+    for c in codes:
+        try:
+            ws.send(sub_msg(ap, c, on=False))
+            done += 1
+            time.sleep(0.05)
+        except Exception:
+            break
+    CLEANUP["codes"] = set()
+    print(f"[정리] 구독 해제 {done}/{len(codes)}종목 {reason}", flush=True)
+    try:
+        ws.close()
+    except Exception:
+        pass
+    CLEANUP["ws"] = None
+
+
+def _on_signal(signum, frame):
+    release_all(f"(신호 {signum})")
+    sys.exit(0)
+
+
+for _sig in (signal.SIGTERM, signal.SIGINT):
+    try:
+        signal.signal(_sig, _on_signal)
+    except Exception:
+        pass
 
 
 # ══════════ 텔레그램 ══════════
@@ -639,6 +677,8 @@ def main():
         warned = set()
         fail_msg = {}          # 종목 -> KIS 실패 사유
         total_sub = [0]
+        over = [False]         # MAX SUBSCRIBE OVER 발생 여부
+        over_notified = [False]
 
         def subscribe(code):
             if total_sub[0] >= 38:          # KIS 세션당 등록 한도(41) 여유분
@@ -655,12 +695,23 @@ def main():
                 if ws is None:
                     ws = websocket.create_connection(WS_KR, timeout=30)
                     ws.settimeout(1)
+                    CLEANUP["ws"] = ws
+                    CLEANUP["approval"] = approval
+                    CLEANUP["codes"] = set()
                     sub_sent.clear()
                     sub_ok.clear()
                     total_sub[0] = 0
+                    # 이전 세션 잔여 등록 해제 (강제종료로 남은 것 정리)
+                    for c in list(store):
+                        try:
+                            ws.send(sub_msg(approval, c, on=False))
+                            time.sleep(0.05)
+                        except Exception:
+                            pass
+                    time.sleep(0.5)
                     for c in list(store):
                         subscribe(c)
-                    print(f"[{datetime.now(KST):%H:%M}] 연결 · "
+                    print(f"[{datetime.now(KST):%H:%M}] 연결 · 잔여해제 후 "
                           f"구독요청 {len(sub_sent)}종목", flush=True)
 
                 # ── 신규 등록분 구독 / 해제분 정리 ──
@@ -713,8 +764,11 @@ def main():
                                 if key_ and (rt == "0" or
                                              any(w in m1 for w in ok_words)):
                                     sub_ok.add(key_)
+                                    CLEANUP["codes"].add(key_)
                                 elif key_:
                                     fail_msg[key_] = m1[:60]
+                                    if "MAX SUBSCRIBE" in m1:
+                                        over[0] = True
                         except Exception as ex:
                             print(f"[KIS] 응답 파싱 실패: {str(raw)[:120]} ({ex})",
                                   flush=True)
@@ -729,10 +783,15 @@ def main():
                         elif c not in warned:
                             warned.add(c)
                             why = fail_msg.get(c, "응답 없음")
-                            tg(f"[구독 실패] {store[c]['name']} ({c})\n"
-                               f"사유: {why}\n"
-                               f"해제 후 다시 등록하거나 재시작해주세요.")
+                            tg(f"[구독 실패] {store[c]['name']} ({c})\n사유: {why}")
+                    if over[0] and not over_notified[0]:
+                        over_notified[0] = True
+                        tg("[알림] KIS 실시간 등록 한도(41개)를 초과했습니다.\n"
+                           "이전 세션의 등록이 서버에 남아 있어서 생기는 문제입니다.\n"
+                           "· 워크플로를 취소(Cancel)하지 말고 자동 종료를 기다려주세요\n"
+                           "· 장 마감 후 한도가 초기화됩니다")
 
+                CLEANUP["codes"] = set(sub_ok)
                 periodic_save(store)
                 if time.time() - last_stat > 120:
                     last_stat = time.time()
@@ -750,11 +809,7 @@ def main():
                     pass
                 ws = None
                 time.sleep(5)
-        if ws:
-            try:
-                ws.close()
-            except Exception:
-                pass
+        release_all("(정상 종료)")
 
     else:
         last = 0
