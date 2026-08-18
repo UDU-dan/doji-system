@@ -36,6 +36,9 @@ OPEN_T = dtime(9, 0)
 CLOSE_T = dtime(15, 20)
 MAX_SUB = 38                    # KIS 세션 한도(41) 여유분
 AUTO_CSV = "results/watchlist_kr.csv"
+RESET_PCT = 0.3          # 저항선 아래로 이 % 이상 빠져야 재알림 허용
+COOLDOWN_SEC = 900       # 같은 종목 재알림 최소 간격 (15분)
+MAX_REPEAT = 3           # 같은 종목 돌파 알림 하루 최대 횟수
 
 CLEANUP = {"ws": None, "approval": None, "codes": set()}
 
@@ -181,23 +184,28 @@ def judge(code, v, px):
     if stop and px <= float(stop):
         if v.get("state") != "이탈":
             v["state"] = "이탈"
-            v["notified"] = []
         return None
 
-    # ── 지정가 아래 : 상태만 갱신, 알림 없음 ──
+    # ── 지정가 아래 ──
     if px < target:
         if v.get("state") not in ("보류", "이탈"):
             v["state"] = "보류"
+        # 확실히(0.3% 이상) 빠졌을 때만 재알림 허용
+        if diff <= -RESET_PCT:
             v["notified"] = []
         return None
 
-    if v.get("state") in ("보류", "이탈"):
-        notified = []                      # 복귀 -> 다시 알림
+    if v.get("state") in ("보류", "이탈") and not notified:
+        notified = []                      # 되돌림 후 복귀
 
-    # ── 도달 ──
+    # ── 재알림 제한 ──
+    last_t = float(v.get("last_alert_ts") or 0)
+    cnt = int(v.get("alert_cnt") or 0)
+    can_alert = (time.time() - last_t >= COOLDOWN_SEC) and cnt < MAX_REPEAT
+
     if px == target:
         v["state"] = "도달"
-        if "도달" not in notified:
+        if "도달" not in notified and can_alert:
             notified.append("도달")
             msg = (f"{icon} ⚡ 도 달 ⚡ {icon}\n"
                    f"━━━━━━━━━━━━━━\n"
@@ -205,14 +213,14 @@ def judge(code, v, px):
                    f"지정 {f(target)} = 현재 {f(px)}\n"
                    f"동일가격 · 돌파 대기\n"
                    f"{ts}")
-    # ── 돌파 / 익절 ──
     else:
         v["state"] = "돌파"
-        if "돌파" not in notified:
+        if "돌파" not in notified and can_alert:
             notified.append("돌파")
             extra = (f"\n익절 {f(float(tgt))} · 손절 {f(float(stop))}"
                      if tgt and stop else "")
-            msg = (f"{icon} 🚨🚨 돌 파 🚨🚨 {icon}\n"
+            rep = f"  ({cnt + 1}회차)" if cnt else ""
+            msg = (f"{icon} 🚨🚨 돌 파 🚨🚨 {icon}{rep}\n"
                    f"━━━━━━━━━━━━━━\n"
                    f"{name} ({code}){pat}\n"
                    f"{f(target)} → {f(px)}  ({diff:+.2f}%)"
@@ -234,9 +242,13 @@ def judge(code, v, px):
 
     v["notified"] = notified
     if msg:
+        v["last_alert_ts"] = time.time()
+        if "돌 파" in msg:
+            v["alert_cnt"] = cnt + 1
         ev = v.setdefault("events", [])
-        head = "도달" if "도 달" in msg else ("돌파" if "돌 파" in msg else
-                                           ("익절" if "익 절" in msg else "추가상승"))
+        head = ("도달" if "도 달" in msg else
+                "돌파" if "돌 파" in msg else
+                "익절" if "익 절" in msg else "추가상승")
         ev.append(f"{now():%m/%d %H:%M:%S} {head} {f(px)}")
         v["events"] = ev[-8:]
     return msg
