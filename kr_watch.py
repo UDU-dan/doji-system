@@ -161,15 +161,15 @@ def build_targets():
 
 # ══════════ 판정 ══════════
 def judge(code, v, px):
-    """알림 문자열. 없으면 None"""
+    """알림 문자열. 없으면 None (보류·이탈은 알림 없이 상태만 갱신)"""
     target = float(v["price"])
     name, kind = v["name"], v.get("kind", "지정")
     icon = "⭐" if kind == "지정" else "🔵"
-    tag = f"{icon} [{kind}" + (f"·{v['pattern']}]" if v.get("pattern") else "]")
+    pat = f" · {v['pattern']}" if v.get("pattern") else ""
     notified = v.get("notified", [])
     diff = (px - target) / target * 100
     ts = now().strftime("%H:%M:%S")
-    f = lambda x: f"{x:,.0f}원"
+    f = lambda x: f"{x:,.0f}"
 
     v["last_px"] = px
     v["last_at"] = now().strftime("%m/%d %H:%M:%S")
@@ -177,53 +177,67 @@ def judge(code, v, px):
     tgt = v.get("tgt")
     msg = None
 
-    # 손절선 이탈 (자동 리스트만 손절선이 있음)
-    if stop and px <= float(stop) and v.get("state") != "이탈":
-        v["state"] = "이탈"
-        v["notified"] = []
-        msg = (f"[이탈] {name} ({code})  {tag}\n"
-               f"현재 {f(px)} · 손절선 {f(float(stop))} 이탈\n"
-               f"감시 해제\n{ts} KST")
-    elif px < target:
+    # ── 손절선 이탈 : 상태만 갱신, 알림 없음 ──
+    if stop and px <= float(stop):
+        if v.get("state") != "이탈":
+            v["state"] = "이탈"
+            v["notified"] = []
+        return None
+
+    # ── 지정가 아래 : 상태만 갱신, 알림 없음 ──
+    if px < target:
         if v.get("state") not in ("보류", "이탈"):
             v["state"] = "보류"
             v["notified"] = []
-            msg = (f"[보류] {name} ({code})  {tag}\n"
-                   f"기준 {f(target)} · 현재 {f(px)} ({diff:+.2f}%)\n"
-                   f"복귀시 다시 알림\n{ts} KST")
-    elif px == target:
-        if v.get("state") in ("보류", "이탈"):
-            notified = []
+        return None
+
+    if v.get("state") in ("보류", "이탈"):
+        notified = []                      # 복귀 -> 다시 알림
+
+    # ── 도달 ──
+    if px == target:
         v["state"] = "도달"
         if "도달" not in notified:
             notified.append("도달")
-            msg = (f"[도달] {name} ({code})  {tag}\n"
-                   f"기준 {f(target)} · 현재 {f(px)}\n동일가격\n{ts} KST")
+            msg = (f"{icon} ⚡ 도 달 ⚡ {icon}\n"
+                   f"━━━━━━━━━━━━━━\n"
+                   f"{name} ({code}){pat}\n"
+                   f"지정 {f(target)} = 현재 {f(px)}\n"
+                   f"동일가격 · 돌파 대기\n"
+                   f"{ts}")
+    # ── 돌파 / 익절 ──
     else:
-        if v.get("state") in ("보류", "이탈"):
-            notified = []
         v["state"] = "돌파"
         if "돌파" not in notified:
             notified.append("돌파")
-            extra = f"\n익절 {f(float(tgt))} · 손절 {f(float(stop))}" if tgt and stop else ""
-            msg = (f"[돌파] {name} ({code})  {tag}\n"
-                   f"기준 {f(target)} → 현재 {f(px)} ({diff:+.2f}%)"
-                   f"{extra}\n{ts} KST")
+            extra = (f"\n익절 {f(float(tgt))} · 손절 {f(float(stop))}"
+                     if tgt and stop else "")
+            msg = (f"{icon} 🚨🚨 돌 파 🚨🚨 {icon}\n"
+                   f"━━━━━━━━━━━━━━\n"
+                   f"{name} ({code}){pat}\n"
+                   f"{f(target)} → {f(px)}  ({diff:+.2f}%)"
+                   f"{extra}\n"
+                   f"{ts}")
         elif tgt and px >= float(tgt) and "익절" not in notified:
             notified.append("익절")
-            msg = (f"[익절] {name} ({code})  {tag}\n"
+            msg = (f"{icon} 💰 익 절 💰 {icon}\n"
+                   f"━━━━━━━━━━━━━━\n"
+                   f"{name} ({code}){pat}\n"
                    f"현재 {f(px)} · 목표 {f(float(tgt))} 도달\n"
-                   f"절반 정리 후 손절을 진입가({f(target)})로\n{ts} KST")
+                   f"절반 정리 → 손절을 {f(target)}로\n"
+                   f"{ts}")
         elif (not tgt) and diff >= AB.BREAK_EXTRA and "돌파+" not in notified:
             notified.append("돌파+")
-            msg = (f"[추가상승] {name} ({code})  {tag}\n"
-                   f"기준 {f(target)} → 현재 {f(px)} ({diff:+.2f}%)\n"
-                   f"진입 구간 벗어남 - 눌림 대기 또는 가격 재설정\n{ts} KST")
+            msg = (f"{icon} 📈 추가상승\n"
+                   f"{name} ({code}) {f(target)} → {f(px)} ({diff:+.2f}%)\n"
+                   f"진입 구간 벗어남 · 눌림 대기\n{ts}")
 
     v["notified"] = notified
     if msg:
         ev = v.setdefault("events", [])
-        ev.append(f"{now():%m/%d %H:%M:%S} {msg.split(']')[0].lstrip('[')} {f(px)}")
+        head = "도달" if "도 달" in msg else ("돌파" if "돌 파" in msg else
+                                           ("익절" if "익 절" in msg else "추가상승"))
+        ev.append(f"{now():%m/%d %H:%M:%S} {head} {f(px)}")
         v["events"] = ev[-8:]
     return msg
 
