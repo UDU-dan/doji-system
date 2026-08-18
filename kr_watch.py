@@ -39,6 +39,7 @@ AUTO_CSV = "results/watchlist_kr.csv"
 RESET_PCT = 0.3          # 저항선 아래로 이 % 이상 빠져야 재알림 허용
 COOLDOWN_SEC = 900       # 같은 종목 재알림 최소 간격 (15분)
 MAX_REPEAT = 3           # 같은 종목 돌파 알림 하루 최대 횟수
+AUTO_ALERT = False       # 🔵 자동 선별 종목 알림 (검증 완료 전까지 끔)
 
 CLEANUP = {"ws": None, "approval": None, "codes": set()}
 
@@ -180,10 +181,26 @@ def judge(code, v, px):
     tgt = v.get("tgt")
     msg = None
 
+    # 자동 선별 종목은 알림 없이 상태만 추적 (AUTO_ALERT=False)
+    silent = (kind == "자동") and not AUTO_ALERT
+
     # ── 손절선 이탈 : 상태만 갱신, 알림 없음 ──
     if stop and px <= float(stop):
         if v.get("state") != "이탈":
             v["state"] = "이탈"
+        return None
+
+    if silent:
+        if stop and px <= float(stop):
+            v["state"] = "이탈"
+        elif px < target:
+            v["state"] = "보류"
+        elif px == target:
+            v["state"] = "도달"
+        else:
+            v["state"] = "돌파"
+            if tgt and px >= float(tgt):
+                v["state"] = "익절가도달"
         return None
 
     # ── 지정가 아래 ──
@@ -201,7 +218,12 @@ def judge(code, v, px):
     # ── 재알림 제한 ──
     last_t = float(v.get("last_alert_ts") or 0)
     cnt = int(v.get("alert_cnt") or 0)
-    can_alert = (time.time() - last_t >= COOLDOWN_SEC) and cnt < MAX_REPEAT
+    # 쿨다운은 '같은 종류 반복'을 막기 위한 것.
+    # 도달 -> 돌파처럼 단계가 올라가는 첫 알림은 즉시 보낸다.
+    fresh = (px == target and "도달" not in notified) or \
+            (px > target and "돌파" not in notified)
+    can_alert = cnt < MAX_REPEAT and (
+        fresh or time.time() - last_t >= COOLDOWN_SEC)
 
     if px == target:
         v["state"] = "도달"
@@ -332,6 +354,8 @@ def main():
 
     tg(summary(targets, f"[국장 통합감시] {now():%m/%d %H:%M} KST\n"
                         f"개장 09:00 · 마감 15:20")
+       + ("\n\n※ 🔵 자동 종목은 현재 알림 없이 감시만 합니다 (현황으로 확인)"
+          if not AUTO_ALERT else "")
        + "\n\n지정가 등록: 종목명 또는 코드 + 가격"
          "\n예) 삼성전자 71900 / GS건설 해제 / 현황")
 
