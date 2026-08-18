@@ -29,56 +29,73 @@
   "417200": {
     "name": "LS머트리얼즈",
     "price": 12660.0,
-    "state": "대기",
+    "state": "보류",
     "notified": [],
     "market": "kr",
     "added": "08/14 12:36",
-    "last_px": null,
-    "last_at": null,
-    "events": []
+    "last_px": 12260.0,
+    "last_at": "08/18 09:16:46",
+    "events": [
+      "08/18 09:16:46 보류 12,260원"
+    ]
   },
   "036540": {
     "name": "SFA반도체",
     "price": 6480.0,
-    "state": "대기",
+    "state": "보류",
     "notified": [],
     "market": "kr",
     "added": "08/14 12:37",
-    "last_px": null,
-    "last_at": null,
-    "events": []
+    "last_px": 6080.0,
+    "last_at": "08/18 09:16:52",
+    "events": [
+      "08/18 09:16:52 보류 6,080원"
+    ]
   },
   "005950": {
     "name": "이수화학",
     "price": 15770.0,
-    "state": "대기",
+    "state": "보류",
     "notified": [],
     "market": "kr",
     "added": "08/14 12:56",
-    "last_px": null,
-    "last_at": null,
-    "events": []
+    "last_px": 14070.0,
+    "last_at": "08/18 09:16:51",
+    "events": [
+      "08/18 09:16:51 보류 14,070원"
+    ]
   },
   "127120": {
     "name": "제이에스링크",
     "price": 41250.0,
-    "state": "대기",
+    "state": "보류",
     "notified": [],
     "market": "kr",
     "added": "08/14 13:08",
-    "last_px": null,
-    "last_at": null,
-    "events": []
+    "last_px": 40300.0,
+    "last_at": "08/18 09:16:59",
+    "events": [
+      "08/18 09:16:59 보류 40,300원"
+    ]
   },
   "006360": {
     "name": "GS건설",
     "price": 35750.0,
-    "state": "대기",
-    "notified": [],
+    "state": "보류",
+    "notified": [
+      "돌파",
+      "돌파+",
+      "도달"
+    ],
     "market": "kr",
     "added": "08/14 13:09",
-    "last_px": null,
-    "last_at": null,
-    "events": []
+    "last_px": 35700.0,
+    "last_at": "08/18 09:18:20",
+    "events": [
+      "08/18 09:16:48 돌파 35,900원",
+      "08/18 09:16:54 추가상승 35,950원",
+      "08/18 09:18:12 도달 35,750원",
+      "08/18 09:18:20 보류 35,700원"
+    ]
   }
 }
