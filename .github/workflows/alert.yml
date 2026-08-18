@@ -9,8 +9,6 @@ on:
         default: 'us'
         type: choice
         options: ['us', 'kr']
-  schedule:
-    - cron: '50 12 * * 1-5'
 
 permissions:
   contents: write
