@@ -17,9 +17,6 @@ on:
         description: '대상 종목 수'
         required: true
         default: '800'
-  schedule:
-    - cron: '0 23 * * 0-4'
-    - cron: '0 13 * * 1-5'
 
 permissions:
   contents: read
