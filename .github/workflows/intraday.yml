@@ -17,9 +17,7 @@ on:
         description: '감시 종목 수'
         required: true
         default: '25'
-  schedule:
-    - cron: '0 13 * * 1-5'
-  
+
 permissions:
   contents: read
 
