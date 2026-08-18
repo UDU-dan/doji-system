@@ -30,8 +30,10 @@ import scan as SC
 S = SC.S
 
 # 패턴 파라미터
-SWING_N = 5          # 좌우 이 일수보다 높으면 스윙 고점
-PROMINENCE = 2.0     # 봉우리가 주변 저점보다 이 % 이상 튀어나와야 인정
+SWING_N = 10         # 좌우 이 일수보다 높아야 스윙 고점
+PROMINENCE = 5.0     # 봉우리가 주변 저점보다 이 % 이상 튀어나와야 인정
+UPPER_CHECK = 15.0   # 저항선 위 이 % 이내에 더 높은 고점 있으면 제외
+RISE_MIN = 2.0       # 고점상승: 직전 고점보다 이 % 이상 높아야 인정
 LOOKBACK = 1250      # 저항선 탐색 기간 (약 5년)
 SHOULDER_MIN = 85.0  # 삼봉: 어깨가 머리의 이 % 이상이어야 인정
 SHOULDER_MAX = 98.0  # 어깨가 머리의 이 % 이하 (가운데가 확실히 높아야)
@@ -79,19 +81,29 @@ def swing_highs(highs, upto, n=SWING_N, lookback=LOOKBACK):
     return out
 
 
+def has_upper_wall(peaks, level):
+    """저항선 위 UPPER_CHECK % 이내에 더 높은 고점이 있으면 True (=제외 대상)"""
+    hi = level * (1 + UPPER_CHECK / 100)
+    return any(level * 1.002 < p < hi for _, p in peaks)
+
+
 def find_resistances(peaks, price):
-    """(저항가, 터치수, 종류) 목록. 현재가 위쪽 저항만."""
+    """(저항가, 터치수, 종류, 지점인덱스) 목록. 현재가 바로 위 저항만."""
     res = []
     if len(peaks) < 2:
         return res
 
-    # 다중 저항: 비슷한 가격끼리 묶기
+    def usable(lvl):
+        if not (price < lvl <= price * (1 + RES_NEAR / 100)):
+            return False
+        return not has_upper_wall(peaks, lvl)      # 위에 더 큰 벽 있으면 제외
+
+    # ── 다중저항 : 완전히 같은 가격에서 2회 이상 ──
     used = [False] * len(peaks)
     for a in range(len(peaks)):
         if used[a]:
             continue
-        grp = [peaks[a][1]]
-        gidx = [peaks[a][0]]
+        grp, gidx = [peaks[a][1]], [peaks[a][0]]
         used[a] = True
         for b in range(a + 1, len(peaks)):
             if used[b]:
@@ -102,13 +114,12 @@ def find_resistances(peaks, price):
                 used[b] = True
         if len(grp) >= MIN_TOUCH:
             lvl = float(np.mean(grp))
-            # 그룹 내 모든 고점이 평균 대비 오차 안에 있어야 함
             if max(abs(x - lvl) / lvl * 100 for x in grp) > CLUSTER_PCT:
                 continue
-            if price < lvl <= price * (1 + RES_NEAR / 100):
+            if usable(lvl):
                 res.append((lvl, len(grp), "다중저항", list(gidx)))
 
-    # 삼봉: 연속 3개 중 가운데가 최고
+    # ── 삼봉 : 연속 3개 중 가운데가 최고 ──
     for k in range(len(peaks) - 2):
         p1, p2, p3 = peaks[k][1], peaks[k + 1][1], peaks[k + 2][1]
         if p2 <= p1 or p2 <= p3:
@@ -118,9 +129,18 @@ def find_resistances(peaks, price):
             continue
         if not (SHOULDER_MIN <= r3 <= SHOULDER_MAX):
             continue
-        if price < p2 <= price * (1 + RES_NEAR / 100):
+        if usable(p2):
             res.append((float(p2), 3, "삼봉",
                         [peaks[k][0], peaks[k + 1][0], peaks[k + 2][0]]))
+
+    # ── 고점상승 : 직전 고점보다 다음 고점이 높은 계단식 구조 ──
+    for k in range(len(peaks) - 1):
+        p1, p2 = peaks[k][1], peaks[k + 1][1]
+        if p2 < p1 * (1 + RISE_MIN / 100):
+            continue                                   # 충분히 안 올라감
+        if usable(p2):
+            res.append((float(p2), 2, "고점상승",
+                        [peaks[k][0], peaks[k + 1][0]]))
     return res
 
 
