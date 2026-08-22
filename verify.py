@@ -30,15 +30,23 @@ import scan as SC
 S = SC.S
 
 # 패턴 파라미터
+# ══════ 봉우리 판정 (교본: "누가 봐도 3개") ══════
 SWING_N = 10         # 좌우 이 일수보다 높아야 스윙 고점
-PROMINENCE = 5.0     # 봉우리가 주변 저점보다 이 % 이상 튀어나와야 인정
-UPPER_CHECK = 15.0   # 저항선 위 이 % 이내에 더 높은 고점 있으면 제외
-RISE_MIN = 2.0       # 고점상승: 직전 고점보다 이 % 이상 높아야 인정
+PROMINENCE = 10.0    # 주변 저점 대비 이 % 이상 튀어나와야 봉우리
+VALLEY_MIN = 5.0     # 봉우리 사이 골이 이 % 이상 깊어야 별개 봉우리
+MIN_GAP = 20         # 봉우리 간 최소 간격(거래일)
 LOOKBACK = 1250      # 저항선 탐색 기간 (약 5년)
-SHOULDER_MIN = 85.0  # 삼봉: 어깨가 머리의 이 % 이상이어야 인정
-SHOULDER_MAX = 98.0  # 어깨가 머리의 이 % 이하 (가운데가 확실히 높아야)
-CLUSTER_PCT = 0.0    # 고가가 완전히 일치할 때만 같은 저항선
-MIN_GAP = 15         # 고점 간 최소 간격(거래일)
+
+# ══════ 패턴 1. 삼봉언덕 (교본: 세 고점이 대략 수평) ══════
+FLAT_PCT = 2.0       # 세 고점의 최대 편차 % (수평 판정)
+
+# ══════ 패턴 2. 가운데자리 (교본: 호가 1~2칸, 0.1~0.2%) ══════
+CLUSTER_PCT = 0.0    # 완전 일치만 (교본 권장은 0.1~0.2)
+
+# ══════ 공통 필터 ══════
+UPPER_CHECK = 15.0   # 저항선 위 이 % 이내에 더 높은 고점 있으면 제외
+MA240_FILTER = True  # 현재가가 240일선 위인 종목만
+RISE_MIN = 2.0       # 고점상승: 직전 고점보다 이 % 이상 높아야
 MIN_TOUCH = 2        # 최소 터치 횟수
 RES_NEAR = 3.0       # 현재가가 저항선 이 % 아래일 때만 후보
 RES_STOP_BUF = 1.5   # 저항선 돌파형 손절: 저항선 아래 이 %
@@ -59,32 +67,58 @@ def doji_kind(body_r, up_r, dn_r, rng_atr=1.0):
     return "롱레그" if rng_atr >= 1.5 else "십자"
 
 
-def swing_highs(highs, upto, n=SWING_N, lookback=LOOKBACK):
-    """upto 인덱스까지의 스윙 고점 [(idx, price), ...]"""
-    out = []
+def swing_highs(highs, upto, lows=None, n=SWING_N, lookback=LOOKBACK):
+    """
+    upto 인덱스까지의 스윙 고점 [(idx, price), ...]
+
+    교본 "누가 봐도 봉우리" 를 세 조건으로 구현한다.
+      1) 좌우 n일보다 확실히 높다
+      2) 주변 저점 대비 PROMINENCE % 이상 돌출
+      3) 앞 봉우리와의 사이에 VALLEY_MIN % 이상의 골이 있다
+    """
+    if lows is None:
+        lows = highs
+    cand = []
     start = max(n, upto - lookback)
     for k in range(start, upto - n + 1):
         w = highs[k - n:k + n + 1]
         if len(w) < 2 * n + 1:
             continue
-        # 엄격 판정: 양옆보다 확실히 높고, 주변 대비 충분히 돌출돼야 함
-        if not (highs[k] == w.max() and highs[k] > highs[k - n] and highs[k] > highs[k + n]):
+        if not (highs[k] == w.max() and highs[k] > highs[k - n]
+                and highs[k] > highs[k + n]):
             continue
-        if w.min() <= 0 or (highs[k] / w.min() - 1) * 100 < PROMINENCE:
+        # 돌출도는 봉우리 간 최소간격 범위의 저점 기준으로 측정
+        lo_w = lows[max(0, k - MIN_GAP):k + MIN_GAP + 1]
+        base = lo_w.min() if len(lo_w) else 0
+        if base <= 0 or (highs[k] / base - 1) * 100 < PROMINENCE:
             continue
-        if True:
-            if out and k - out[-1][0] < MIN_GAP:
-                if highs[k] > out[-1][1]:
-                    out[-1] = (k, float(highs[k]))
-                continue
-            out.append((k, float(highs[k])))
+        cand.append((k, float(highs[k])))
+
+    # 간격 · 골 깊이로 정리
+    out = []
+    for k, px in cand:
+        if not out:
+            out.append((k, px))
+            continue
+        pk, ppx = out[-1]
+        gap_ok = (k - pk) >= MIN_GAP
+        valley = lows[pk:k + 1].min() if k > pk else px
+        deep_ok = valley > 0 and (min(ppx, px) / valley - 1) * 100 >= VALLEY_MIN
+        if gap_ok and deep_ok:
+            out.append((k, px))                # 별개 봉우리
+        elif px > ppx:
+            out[-1] = (k, px)                  # 같은 덩어리 -> 더 높은 쪽으로
     return out
 
 
-def has_upper_wall(peaks, level):
-    """저항선 위 UPPER_CHECK % 이내에 더 높은 고점이 있으면 True (=제외 대상)"""
+def has_upper_wall(peaks, level, exclude=()):
+    """
+    저항선 위 UPPER_CHECK % 이내에 더 높은 고점이 있으면 True (제외 대상).
+    exclude 에 넣은 인덱스(= 그 패턴을 구성하는 봉우리)는 벽으로 치지 않는다.
+    """
     hi = level * (1 + UPPER_CHECK / 100)
-    return any(level * 1.002 < p < hi for _, p in peaks)
+    ex = set(exclude)
+    return any(i not in ex and level * 1.002 < p < hi for i, p in peaks)
 
 
 def find_resistances(peaks, price):
@@ -93,10 +127,10 @@ def find_resistances(peaks, price):
     if len(peaks) < 2:
         return res
 
-    def usable(lvl):
+    def usable(lvl, own=()):
         if not (price < lvl <= price * (1 + RES_NEAR / 100)):
             return False
-        return not has_upper_wall(peaks, lvl)      # 위에 더 큰 벽 있으면 제외
+        return not has_upper_wall(peaks, lvl, own)   # 위에 더 큰 벽 있으면 제외
 
     # ── 다중저항 : 완전히 같은 가격에서 2회 이상 ──
     used = [False] * len(peaks)
@@ -116,29 +150,29 @@ def find_resistances(peaks, price):
             lvl = float(np.mean(grp))
             if max(abs(x - lvl) / lvl * 100 for x in grp) > CLUSTER_PCT:
                 continue
-            if usable(lvl):
+            if usable(lvl, gidx):
                 res.append((lvl, len(grp), "다중저항", list(gidx)))
 
-    # ── 삼봉 : 연속 3개 중 가운데가 최고 ──
+    # ── 삼봉언덕 : 연속 3개 고점이 대략 수평, 넥라인 = 최고점 ──
     for k in range(len(peaks) - 2):
-        p1, p2, p3 = peaks[k][1], peaks[k + 1][1], peaks[k + 2][1]
-        if p2 <= p1 or p2 <= p3:
+        tri = [peaks[k], peaks[k + 1], peaks[k + 2]]
+        ps = [p for _, p in tri]
+        lo, hi = min(ps), max(ps)
+        if lo <= 0:
             continue
-        r1, r3 = p1 / p2 * 100, p3 / p2 * 100
-        if not (SHOULDER_MIN <= r1 <= SHOULDER_MAX):
+        if (hi / lo - 1) * 100 > FLAT_PCT:      # 수평이 아니면 삼봉 아님
             continue
-        if not (SHOULDER_MIN <= r3 <= SHOULDER_MAX):
-            continue
-        if usable(p2):
-            res.append((float(p2), 3, "삼봉",
-                        [peaks[k][0], peaks[k + 1][0], peaks[k + 2][0]]))
+        neck = hi                               # 넥라인 = 3봉 최고점
+        idxs = [i for i, _ in tri]
+        if usable(neck, idxs):
+            res.append((float(neck), 3, "삼봉", idxs))
 
     # ── 고점상승 : 직전 고점보다 다음 고점이 높은 계단식 구조 ──
     for k in range(len(peaks) - 1):
         p1, p2 = peaks[k][1], peaks[k + 1][1]
         if p2 < p1 * (1 + RISE_MIN / 100):
             continue                                   # 충분히 안 올라감
-        if usable(p2):
+        if usable(p2, [peaks[k][0], peaks[k + 1][0]]):
             res.append((float(p2), 2, "고점상승",
                         [peaks[k][0], peaks[k + 1][0]]))
     return res
@@ -163,6 +197,7 @@ def analyze(df, code, name, market, days, marcap=None):
     tr = pd.concat([h - l, (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
     atr = tr.rolling(14).mean()
     ma20 = c.rolling(20).mean()
+    ma240 = c.rolling(240).mean()
     vol20 = v.rolling(20).mean()
     val20 = (c * v).rolling(20).mean()
     rngs = (h - l).replace(0, np.nan)
@@ -173,6 +208,7 @@ def analyze(df, code, name, market, days, marcap=None):
 
     A = d[["Open", "High", "Low", "Close", "Volume"]].values
     HI = d["High"].values
+    LO = d["Low"].values
     n = len(d)
     min_val = S["MIN_VALUE_KR"] if market == "kr" else S["MIN_VALUE_US"]
     min_px = S["MIN_PRICE_KR"] if market == "kr" else S["MIN_PRICE_US"]
@@ -187,6 +223,10 @@ def analyze(df, code, name, market, days, marcap=None):
         if not np.isfinite(av) or not np.isfinite(m20) or not np.isfinite(val20.iloc[i]):
             continue
         STATS["total"] += 1
+        if MA240_FILTER:
+            m240 = ma240.iloc[i]
+            if not np.isfinite(m240) or C <= m240:
+                continue                       # 240일선 아래면 제외
         if val20.iloc[i] < min_val or C < min_px:
             continue
         STATS["liquidity"] += 1
@@ -208,7 +248,7 @@ def analyze(df, code, name, market, days, marcap=None):
                               f"{str(d.index[i])[5:10]} 고가 {int(round(H)):,}", 0))
 
         # ② 삼봉 / ③ 다중저항
-        pk = swing_highs(HI, i)
+        pk = swing_highs(HI, i, LO)
         for lvl, touch, kind, idxs in find_resistances(pk, C):
             pts = " / ".join(f"{str(d.index[q])[:7]} {int(round(HI[q])):,}"
                              for q in sorted(idxs))
