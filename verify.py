@@ -250,7 +250,7 @@ def analyze(df, code, name, market, days, marcap=None):
         # ② 삼봉 / ③ 다중저항
         pk = swing_highs(HI, i, LO)
         for lvl, touch, kind, idxs in find_resistances(pk, C):
-            pts = " / ".join(f"{str(d.index[q])[:7]} {int(round(HI[q])):,}"
+            pts = " / ".join(f"{str(d.index[q])[:10]} {int(round(HI[q])):,}"
                              for q in sorted(idxs))
             age_d = i - min(idxs)          # 가장 오래된 지점까지의 거래일
             STATS["peaks"] += 1
