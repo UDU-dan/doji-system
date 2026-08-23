@@ -477,7 +477,7 @@ def report(df, mk, days):
                 L.append(f"    · {p}")
             L.append(f"  진입 {r['entry']:,} · 익절 {r['tgt']:,} · "
                      f"손절 {r['stop1']:,} (-{r['stop_pct']}%)")
-            L.append(f"  현재 {r['last']:,} (진입까지 {r['togo']:+.2f}%) · "
+            L.append(f"  현재 {r['last']:,} (진입까지 {r['togo']:+.2f}% 필요) · "
                      f"거래대금 {r['value']}{'억' if mk=='kr' else 'M$'}")
 
     if len(brk):
