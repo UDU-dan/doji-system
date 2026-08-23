@@ -38,10 +38,10 @@ MIN_GAP = 20         # 봉우리 간 최소 간격(거래일)
 LOOKBACK = 1250      # 저항선 탐색 기간 (약 5년)
 
 # ══════ 패턴 1. 삼봉언덕 (교본: 세 고점이 대략 수평) ══════
-FLAT_PCT = 2.0       # 세 고점의 최대 편차 % (수평 판정)
+FLAT_PCT = 3.0       # 세 고점의 최대 편차 % (수평 판정)
 
 # ══════ 패턴 2. 가운데자리 (교본: 호가 1~2칸, 0.1~0.2%) ══════
-CLUSTER_PCT = 0.0    # 완전 일치만 (교본 권장은 0.1~0.2)
+CLUSTER_PCT = 0.2    # 교본: 호가 1~2칸 (0.1~0.2%)
 
 # ══════ 공통 필터 ══════
 UPPER_CHECK = 15.0   # 저항선 위 이 % 이내에 더 높은 고점 있으면 제외
@@ -127,10 +127,16 @@ def find_resistances(peaks, price):
     if len(peaks) < 2:
         return res
 
-    def usable(lvl, own=()):
+    def usable(lvl, own=(), tag=None):
         if not (price < lvl <= price * (1 + RES_NEAR / 100)):
+            if tag:
+                PAT_STATS[f"{tag}_near_fail"] += 1
             return False
-        return not has_upper_wall(peaks, lvl, own)   # 위에 더 큰 벽 있으면 제외
+        if has_upper_wall(peaks, lvl, own):
+            if tag:
+                PAT_STATS[f"{tag}_wall_fail"] += 1
+            return False
+        return True
 
     # ── 다중저항 : 완전히 같은 가격에서 2회 이상 ──
     used = [False] * len(peaks)
@@ -150,7 +156,9 @@ def find_resistances(peaks, price):
             lvl = float(np.mean(grp))
             if max(abs(x - lvl) / lvl * 100 for x in grp) > CLUSTER_PCT:
                 continue
-            if usable(lvl, gidx):
+            PAT_STATS["mid_pair"] += 1
+            if usable(lvl, gidx, "mid"):
+                PAT_STATS["mid_ok"] += 1
                 res.append((lvl, len(grp), "다중저항", list(gidx)))
 
     # ── 삼봉언덕 : 연속 3개 고점이 대략 수평, 넥라인 = 최고점 ──
@@ -161,10 +169,12 @@ def find_resistances(peaks, price):
         if lo <= 0:
             continue
         if (hi / lo - 1) * 100 > FLAT_PCT:      # 수평이 아니면 삼봉 아님
+            PAT_STATS["tri_flat_fail"] += 1
             continue
         neck = hi                               # 넥라인 = 3봉 최고점
         idxs = [i for i, _ in tri]
-        if usable(neck, idxs):
+        if usable(neck, idxs, "tri"):
+            PAT_STATS["tri_ok"] += 1
             res.append((float(neck), 3, "삼봉", idxs))
 
     # ── 고점상승 : 직전 고점보다 다음 고점이 높은 계단식 구조 ──
@@ -173,12 +183,25 @@ def find_resistances(peaks, price):
         if p2 < p1 * (1 + RISE_MIN / 100):
             continue                                   # 충분히 안 올라감
         if usable(p2, [peaks[k][0], peaks[k + 1][0]]):
+            PAT_STATS["rise_ok"] += 1
             res.append((float(p2), 2, "고점상승",
                         [peaks[k][0], peaks[k + 1][0]]))
     return res
 
 
 STATS = dict(total=0, liquidity=0, doji=0, peaks=0, stopwidth=0, wait=0)
+PAT_STATS = dict(
+    peak_cnt=[],        # 종목별 봉우리 개수 분포
+    tri_flat_fail=0,    # 삼봉: 수평 조건 탈락
+    tri_wall_fail=0,    # 삼봉: 위쪽 벽
+    tri_near_fail=0,    # 삼봉: 현재가 거리
+    tri_ok=0,
+    mid_pair=0,         # 가운데자리: 동일가 쌍 발견
+    mid_wall_fail=0,
+    mid_near_fail=0,
+    mid_ok=0,
+    rise_ok=0,
+)
 
 
 def analyze(df, code, name, market, days, marcap=None):
@@ -249,6 +272,7 @@ def analyze(df, code, name, market, days, marcap=None):
 
         # ② 삼봉 / ③ 다중저항
         pk = swing_highs(HI, i, LO)
+        PAT_STATS["peak_cnt"].append(len(pk))
         for lvl, touch, kind, idxs in find_resistances(pk, C):
             pts = " / ".join(f"{str(d.index[q])[:10]} {int(round(HI[q])):,}"
                              for q in sorted(idxs))
@@ -408,6 +432,21 @@ def report(df, mk, days):
     L.append("")
     L.append("━━ 전체 ━━")
     L.append(f"돌파 {len(brk)} · 대기 {len(wait)} · 보류 {len(hold)}")
+    import numpy as _np
+    pc = PAT_STATS["peak_cnt"]
+    if pc:
+        L.append("")
+        L.append("━━ 패턴 진단 ━━")
+        L.append(f"  봉우리 개수: 평균 {_np.mean(pc):.1f} · "
+                 f"중앙 {int(_np.median(pc))} · 최대 {max(pc)} · "
+                 f"3개이상 {sum(1 for x in pc if x >= 3)}/{len(pc)}")
+        L.append(f"  삼봉    수평탈락 {PAT_STATS['tri_flat_fail']} · "
+                 f"위쪽벽 {PAT_STATS['tri_wall_fail']} · "
+                 f"거리 {PAT_STATS['tri_near_fail']} · 성공 {PAT_STATS['tri_ok']}")
+        L.append(f"  가운데자리 동일가쌍 {PAT_STATS['mid_pair']} · "
+                 f"위쪽벽 {PAT_STATS['mid_wall_fail']} · "
+                 f"거리 {PAT_STATS['mid_near_fail']} · 성공 {PAT_STATS['mid_ok']}")
+        L.append(f"  고점상승 성공 {PAT_STATS['rise_ok']}")
     L.append(f"필터 통과: 유동성 {STATS['liquidity']}/{STATS['total']} · "
              f"도지 {STATS['doji']} · 저항선 {STATS['peaks']} · "
              f"손절폭 {STATS['stopwidth']}")
