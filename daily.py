@@ -23,6 +23,8 @@ import pandas as pd
 import scan as SC
 import verify as VF
 
+HOLD_NEAR = 5.0      # 보류 목록: 진입까지 이 % 이내인 종목만 표시
+
 BIO_WORDS = ("제약", "바이오", "생명과학", "파마", "메디", "테라퓨틱스",
              "헬스케어", "신약", "백신", "진단", "의약", "의료")
 BIO_SECTOR = ("제약", "바이오", "의약", "생물", "의료", "헬스",
@@ -141,7 +143,11 @@ def main():
     df = pd.DataFrame(rows)
     df.to_csv(f"results/watchlist_{mk}.csv", index=False, encoding="utf-8-sig")
     wait = df[df["status"] == "대기"]
-    hold = df[df["status"] == "보류"]
+    hold = df[df["status"] == "보류"].copy()
+    if len(hold):
+        # 신호 이후 주가가 크게 빠져 저항선이 멀어진 종목은 제외
+        gap = (hold["entry"] / hold["last"] - 1) * 100
+        hold = hold[gap <= HOLD_NEAR]
     if len(wait) == 0:
         msg = f"[{'국장' if mk == 'kr' else '미장'}] 대기 중 후보 0건 (전체 {len(df)}건)"
         print(msg)
@@ -194,7 +200,7 @@ def main():
             L.append(f"    · {p}")
         L.append(f"  진입 {r['entry']:,} · 익절 {r['tgt']:,} · "
                  f"손절 {r['stop1']:,} (-{r['stop_pct']}%)")
-        L.append(f"  현재 {r['last']:,} (진입까지 {r['togo']:+.2f}%) · "
+        L.append(f"  현재 {r['last']:,} (진입까지 {r['togo']:+.2f}% 필요) · "
                  f"거래대금 {r['value']}{unit}")
         for nw in r.get("news", []):
             L.append(f"  · {nw}")
@@ -204,7 +210,7 @@ def main():
         L.append("━━ 보류 (손절선 아래 · 복귀시 부활) ━━")
         for r in VF.merge_and_score(hold, mk)[:8]:
             L.append(f"{r['name'][:14]} [{r['pattern']}] 진입 {r['entry']:,} "
-                     f"· 현재 {r['last']:,} ({r['togo']:+.1f}%)")
+                     f"· 현재 {r['last']:,} (진입까지 {r['togo']:+.1f}% 필요)")
 
     txt = "\n".join(L)
     print("\n" + txt)
