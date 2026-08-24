@@ -32,9 +32,9 @@ S = SC.S
 # 패턴 파라미터
 # ══════ 봉우리 판정 (교본: "누가 봐도 3개") ══════
 SWING_N = 10         # 좌우 이 일수보다 높아야 스윙 고점
-PROMINENCE = 10.0    # 주변 저점 대비 이 % 이상 튀어나와야 봉우리
-VALLEY_MIN = 5.0     # 봉우리 사이 골이 이 % 이상 깊어야 별개 봉우리
-MIN_GAP = 20         # 봉우리 간 최소 간격(거래일)
+PROMINENCE = 15.0    # 주변 저점 대비 이 % 이상 튀어나와야 봉우리
+VALLEY_MIN = 10.0     # 봉우리 사이 골이 이 % 이상 깊어야 별개 봉우리
+MIN_GAP = 30         # 봉우리 간 최소 간격(거래일)
 LOOKBACK = 1250      # 저항선 탐색 기간 (약 5년)
 
 # ══════ 패턴 1. 삼봉언덕 (교본: 세 고점이 대략 수평) ══════
@@ -64,8 +64,9 @@ CPX_WINDOW = 120     # 복잡 구간 판정 기간
 CPX_CROSS_MIN = 6    # 이 기간 중 이평 교차 횟수가 이 이상이면 "복잡"
 
 # ══════ 패턴 7. 상승시그널 (반전 양봉) ══════
-SIG_FALL_MIN = 35.0  # 반전 캔들 전 하락폭이 이 % 이상이어야 "충분한 하락"
-SIG_ALLOW_PIERCING = False  # 피어싱 허용 여부 (교본: 강도 최하 -> 기본 제외)
+SIG_FALL_MIN = 40.0  # 반전 캔들 전 하락폭이 이 % 이상이어야 "충분한 하락"
+SIG_ALLOW_PIERCING = False
+SIG_ALLOW_ENGULF = False    # 인걸핑 허용 (기본 제외, 파이프바텀만)  # 피어싱 허용 여부 (교본: 강도 최하 -> 기본 제외)
 SIG_LOOKBACK = 120   # 하락 판정 기간
 MIN_TOUCH = 2        # 최소 터치 횟수
 RES_NEAR = 5.0       # 현재가가 저항선 이 % 아래일 때만 후보
@@ -225,7 +226,8 @@ def reversal_signal(A, i):
             continue
         kind = None
         if A[cur, O] < A[prev, C] and A[cur, C] > A[prev, O]:
-            kind = "파이프바텀" if (A[cur, C] - A[cur, O]) > pbody * 1.5 else "인걸핑"
+            kind = ("파이프바텀" if (A[cur, C] - A[cur, O]) > pbody * 1.5
+                    else ("인걸핑" if SIG_ALLOW_ENGULF else None))
         elif SIG_ALLOW_PIERCING and A[cur, C] >= A[prev, C] + pbody * 0.5:
             kind = "피어싱"
         if not kind:
@@ -431,7 +433,9 @@ def analyze(df, code, name, market, days, marcap=None):
         if MA240_FILTER:
             m240 = ma240.iloc[i]
             if not np.isfinite(m240) or C <= m240:
-                continue                       # 240일선 아래면 제외
+                STATS["ma240_out"] = STATS.get("ma240_out", 0) + 1
+                continue
+            STATS["ma240_ok"] = STATS.get("ma240_ok", 0) + 1                       # 240일선 아래면 제외
         if val20.iloc[i] < min_val or C < min_px:
             continue
         STATS["liquidity"] += 1
