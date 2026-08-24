@@ -52,6 +52,20 @@ RISE_MIN = 2.0       # 고점상승: 직전 고점보다 이 % 이상 높아야
 MA5_LEN = 5          # 5주기 이평 (교본: 일봉=5일)
 TORO_UP_MIN = 3.0    # 또로록: 조정 전 상승폭이 이 % 이상이어야 "상승하던" 것으로 인정
 TORO_DROP_MAX = 10.0 # 또로록: 조정 깊이가 이 % 넘으면 조정이 아니라 급락 -> 제외
+
+# ══════ 패턴 5. 빵빵빵 (바닥 양봉 3개) ══════
+BBB_LOOKBACK = 120   # 바닥 판정용 조회 기간
+BBB_BOTTOM_PCT = 20.0  # 3양봉 시작가가 기간 저점 대비 이 % 이내여야 "바닥"
+BBB_REST_MIN = 20    # 패턴 완성 후 최소 조정 기간(거래일, 교본: 한 달 이상)
+BBB_MAX_AGE = 500    # 이 기간 안에 만들어진 3양봉만 유효
+
+# ══════ 패턴 6. 복합조정파동 (통으로 넘기) ══════
+CPX_WINDOW = 120     # 복잡 구간 판정 기간
+CPX_CROSS_MIN = 6    # 이 기간 중 이평 교차 횟수가 이 이상이면 "복잡"
+
+# ══════ 패턴 7. 상승시그널 (반전 양봉) ══════
+SIG_FALL_MIN = 20.0  # 반전 캔들 전 하락폭이 이 % 이상이어야 "충분한 하락"
+SIG_LOOKBACK = 120   # 하락 판정 기간
 MIN_TOUCH = 2        # 최소 터치 횟수
 RES_NEAR = 5.0       # 현재가가 저항선 이 % 아래일 때만 후보
 RES_STOP_BUF = 2.5   # 저항선 돌파형 손절: 저항선 아래 이 %
@@ -123,6 +137,103 @@ def ttororok(A, i):
     if drop > TORO_DROP_MAX:
         return None
     return float(hi_v), hi_i
+
+
+def bbbang(A, i):
+    """
+    패턴 5. 빵빵빵 (바닥 양봉 3개)
+      · 장기 하락 뒤 바닥에서 양봉 3개
+      · 완성 후 최소 한 달 조정
+      · 3양봉의 고점이 저항선
+    반환: (저항선, 3양봉 마지막 인덱스) 또는 None
+    """
+    O, H, L, C = 0, 1, 2, 3
+    best = None
+    lo_start = max(0, i - BBB_MAX_AGE)
+    for e in range(lo_start + 3, i - BBB_REST_MIN + 1):     # e = 3양봉 마지막
+        s3 = e - 2
+        if s3 < BBB_LOOKBACK:
+            continue
+        if not all(A[k, C] > A[k, O] for k in (s3, s3 + 1, e)):
+            continue
+        win_lo = A[max(0, s3 - BBB_LOOKBACK):s3, L]
+        if len(win_lo) == 0:
+            continue
+        base = win_lo.min()
+        if base <= 0:
+            continue
+        # 바닥 조건: 3양봉 시작가가 기간 저점 근처
+        if (A[s3, O] / base - 1) * 100 > BBB_BOTTOM_PCT:
+            continue
+        neck = float(A[s3:e + 1, H].max())
+        # 완성 후 조정: 그 사이 넥라인을 종가로 넘은 적 없어야
+        after = A[e + 1:i + 1]
+        if len(after) < BBB_REST_MIN:
+            continue
+        if after[:, C].max() >= neck:
+            continue
+        best = (neck, e)
+    return best
+
+
+def complex_wave(A, ma_s, ma_l, i):
+    """
+    패턴 6. 복합조정파동
+      · 이평이 반복 교차하는 복잡 구간 -> 구간 전체 최고점이 유일한 저항
+    반환: (저항선, 최고점 인덱스) 또는 None
+    """
+    H = 1
+    s0 = i - CPX_WINDOW
+    if s0 < 1:
+        return None
+    diff = ma_s[s0:i + 1] - ma_l[s0:i + 1]
+    diff = diff[np.isfinite(diff)]
+    if len(diff) < CPX_WINDOW // 2:
+        return None
+    cross = int(np.sum(np.diff(np.sign(diff)) != 0))
+    if cross < CPX_CROSS_MIN:
+        return None                                   # 복잡하지 않음
+    seg = A[s0:i + 1, H]
+    hi_rel = int(np.argmax(seg))
+    return float(seg[hi_rel]), s0 + hi_rel
+
+
+def reversal_signal(A, i):
+    """
+    패턴 7. 상승시그널 (반전 양봉)
+      · 충분한 하락 뒤 바닥에서 피어싱/인걸핑/파이프바텀
+      · 반전 캔들 이후의 고점이 저항선
+    반환: (저항선, 종류, 캔들 인덱스) 또는 None
+    """
+    O, H, L, C = 0, 1, 2, 3
+    for j in range(i - 1, max(0, i - 40), -1):        # 최근 40봉 내 반전 캔들 탐색
+        if j < SIG_LOOKBACK + 1:
+            break
+        prev, cur = j - 1, j
+        if not (A[prev, C] < A[prev, O] and A[cur, C] > A[cur, O]):
+            continue                                   # 음봉 -> 양봉
+        pbody = A[prev, O] - A[prev, C]
+        if pbody <= 0:
+            continue
+        # 충분한 하락 전제
+        win = A[max(0, cur - SIG_LOOKBACK):cur, H]
+        if len(win) == 0:
+            continue
+        peak = win.max()
+        if peak <= 0 or (peak / A[cur, L] - 1) * 100 < SIG_FALL_MIN:
+            continue
+        kind = None
+        if A[cur, O] < A[prev, C] and A[cur, C] > A[prev, O]:
+            kind = "파이프바텀" if (A[cur, C] - A[cur, O]) > pbody * 1.5 else "인걸핑"
+        elif A[cur, C] >= A[prev, C] + pbody * 0.5:
+            kind = "피어싱"
+        if not kind:
+            continue
+        neck = float(A[cur:i + 1, H].max())            # 이후 고점이 저항선
+        if neck <= A[i, C]:
+            continue
+        return neck, kind, cur
+    return None
 
 
 def doji_kind(body_r, up_r, dn_r, rng_atr=1.0):
@@ -290,6 +401,7 @@ def analyze(df, code, name, market, days, marcap=None):
     ma20 = c.rolling(20).mean()
     ma240 = c.rolling(240).mean()
     ma5 = c.rolling(MA5_LEN).mean()
+    ma60 = c.rolling(60).mean()
     vol20 = v.rolling(20).mean()
     val20 = (c * v).rolling(20).mean()
     rngs = (h - l).replace(0, np.nan)
@@ -359,6 +471,33 @@ def analyze(df, code, name, market, days, marcap=None):
             cands.append(("또로록", lvl, "또로록",
                           f"{str(d.index[hidx])[:10]} 조정전고점 {int(round(lvl)):,}",
                           i - hidx))
+
+        # ⑤ 빵빵빵
+        bb = bbbang(A, i)
+        if bb and near_ok(bb[0]):
+            lvl, eidx = bb
+            STATS["bbb"] = STATS.get("bbb", 0) + 1
+            cands.append(("빵빵빵", lvl, "빵빵빵",
+                          f"{str(d.index[eidx])[:10]} 3양봉고점 {int(round(lvl)):,}",
+                          i - eidx))
+
+        # ⑥ 복합조정파동
+        cw = complex_wave(A, ma20.values, ma60.values, i)
+        if cw and near_ok(cw[0]):
+            lvl, hidx = cw
+            STATS["cpx"] = STATS.get("cpx", 0) + 1
+            cands.append(("복합조정", lvl, "복합조정",
+                          f"{str(d.index[hidx])[:10]} 구간최고 {int(round(lvl)):,}",
+                          i - hidx))
+
+        # ⑦ 상승시그널
+        rs = reversal_signal(A, i)
+        if rs and near_ok(rs[0]):
+            lvl, kind, cidx = rs
+            STATS["sig"] = STATS.get("sig", 0) + 1
+            cands.append((f"상승시그널({kind})", lvl, "상승시그널",
+                          f"{str(d.index[cidx])[:10]} {kind} 이후고점 "
+                          f"{int(round(lvl)):,}", i - cidx))
 
         # ② 삼봉 / ③ 다중저항
         pk = swing_highs(HI, i, LO)
