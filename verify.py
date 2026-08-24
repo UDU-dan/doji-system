@@ -51,6 +51,7 @@ RISE_MIN = 2.0       # 고점상승: 직전 고점보다 이 % 이상 높아야
 # ══════ 패턴 3. 양양음 / 패턴 4. 또로록 ══════
 MA5_LEN = 5          # 5주기 이평 (교본: 일봉=5일)
 TORO_UP_MIN = 3.0    # 또로록: 조정 전 상승폭이 이 % 이상이어야 "상승하던" 것으로 인정
+TORO_DROP_MAX = 10.0 # 또로록: 조정 깊이가 이 % 넘으면 조정이 아니라 급락 -> 제외
 MIN_TOUCH = 2        # 최소 터치 횟수
 RES_NEAR = 5.0       # 현재가가 저항선 이 % 아래일 때만 후보
 RES_STOP_BUF = 2.5   # 저항선 돌파형 손절: 저항선 아래 이 %
@@ -117,6 +118,10 @@ def ttororok(A, i):
     lo_before = A[max(0, hi_i - 5):hi_i + 1, L].min()
     if lo_before <= 0 or (hi_v / lo_before - 1) * 100 < TORO_UP_MIN:
         return None                                   # "상승하던" 조건 미충족
+    # 조정은 "또로록 흘러내리는" 정도여야 한다. 급락은 조정이 아님
+    drop = (hi_v / A[i, C] - 1) * 100
+    if drop > TORO_DROP_MAX:
+        return None
     return float(hi_v), hi_i
 
 
@@ -325,11 +330,15 @@ def analyze(df, code, name, market, days, marcap=None):
         # 후보 목록: (패턴명, 저항가, 부가정보)
         cands = []
 
+        # 캔들 패턴 공통: 저항선이 현재가 RES_NEAR % 이내여야 후보
+        def near_ok(lvl):
+            return C < lvl <= C * (1 + RES_NEAR / 100)
+
         # ① 도지
         if rg >= av * S["MIN_RANGE_ATR"] and vr >= S["VOL_MIN"]:
             k = doji_kind(float(body_r.iloc[i]), float(up_r.iloc[i]),
                           float(dn_r.iloc[i]), rg / av if av > 0 else 1.0)
-            if k and k != "grave":
+            if k and k != "grave" and near_ok(H):
                 STATS["doji"] += 1
                 cands.append((f"도지({k})", H, "도지",
                               f"{str(d.index[i])[5:10]} 고가 {int(round(H)):,}", 0))
@@ -337,14 +346,14 @@ def analyze(df, code, name, market, days, marcap=None):
         # ③ 양양음
         m5 = ma5.values
         yy = yang_yang_eum(A, m5, i)
-        if yy:
+        if yy and near_ok(yy):
             STATS["yye"] = STATS.get("yye", 0) + 1
             cands.append(("양양음", yy, "양양음",
                           f"{str(d.index[i-1])[5:10]} 양봉고가 {int(round(yy)):,}", 0))
 
         # ④ 또로록
         tt = ttororok(A, i)
-        if tt:
+        if tt and near_ok(tt[0]):
             lvl, hidx = tt
             STATS["toro"] = STATS.get("toro", 0) + 1
             cands.append(("또로록", lvl, "또로록",
