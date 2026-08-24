@@ -24,7 +24,7 @@ import scan as SC
 import verify as VF
 
 HOLD_NEAR = 5.0      # 진입까지 이 % 이내인 종목만 감시·표시
-WATCH_MAX = 20       # 장중 감시 최대 종목 수
+WATCH_MAX = 35       # 장중 실시간 감시 최대 종목 수 (KIS 웹소켓 41 한도)
 
 BIO_WORDS = ("제약", "바이오", "생명과학", "파마", "메디", "테라퓨틱스",
              "헬스케어", "신약", "백신", "진단", "의약", "의료")
@@ -77,12 +77,31 @@ def is_bio(name, sector=""):
     return any(w in t for w in BIO_WORDS)
 
 
+def diag_text():
+    """패턴별로 어디서 몇 개가 탈락했는지"""
+    import numpy as _np
+    P = VF.PAT_STATS
+    pc = P.get("peak_cnt") or []
+    if not pc:
+        return ""
+    L = ["", "━━ 패턴 진단 ━━",
+         f"  봉우리: 평균 {_np.mean(pc):.1f}개 · 3개이상 "
+         f"{sum(1 for x in pc if x >= 3)}/{len(pc)}종목",
+         f"  삼봉      수평탈락 {P['tri_flat_fail']} · 위쪽벽 {P['tri_wall_fail']}"
+         f" · 거리 {P['tri_near_fail']} → 성공 {P['tri_ok']}",
+         f"  가운데자리 동일가쌍 {P['mid_pair']} · 위쪽벽 {P['mid_wall_fail']}"
+         f" · 거리 {P['mid_near_fail']} → 성공 {P['mid_ok']}",
+         f"  고점상승  성공 {P['rise_ok']}"]
+    return "\n".join(L)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--market", choices=["kr", "us"], default="kr")
     ap.add_argument("--days", type=int, default=5)
     ap.add_argument("--universe", type=int, default=800)
-    ap.add_argument("--top", type=int, default=10)
+    ap.add_argument("--top", type=int, default=15,
+                    help="텔레그램 리스트에 표시할 종목 수")
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--no-bio", action="store_true", default=True)
     a = ap.parse_args()
@@ -161,17 +180,24 @@ def main():
         r["is_bio"] = (_norm(r["code"]) in bio_set) or is_bio(r["name"])
 
     # 비바이오 기준으로 top개를 확보하되, 그 사이에 낀 바이오는 표시만 하고 유지
-    # ── 감시용 CSV: 대기/보류 중 현재가 기준으로 아직 유효한 것만 ──
+    # ── 전체 후보 (검토용, 개수 제한 없음) ──
+    df.to_csv(f"results/candidates_{mk}.csv", index=False, encoding="utf-8-sig")
+
+    # ── 감시용: 현재가 기준으로 아직 유효한 것만, KIS 한도 내 ──
     live = df[df["status"].isin(["대기", "보류"])].copy()
     if len(live):
         gap = (live["entry"] / live["last"] - 1) * 100
         live = live[(gap >= 0) & (gap <= HOLD_NEAR)]
     if len(live):
-        live = live.sort_values("stop_pct").drop_duplicates("code")
-        live = live.head(WATCH_MAX)
+        live["_gap"] = (live["entry"] / live["last"] - 1) * 100
+        live = live.sort_values(["_gap", "stop_pct"]).drop_duplicates("code")
+        live = live.drop(columns=["_gap"])
+    total_live = len(live)
+    live = live.head(WATCH_MAX)
     live.to_csv(f"results/watchlist_{mk}.csv", index=False, encoding="utf-8-sig")
-    print(f"      감시 대상 {len(live)}종목 저장 "
-          f"(진입까지 {HOLD_NEAR}% 이내)", flush=True)
+    print(f"      전체 후보 {len(df)}건 → candidates_{mk}.csv", flush=True)
+    print(f"      감시 대상 {len(live)}/{total_live}종목 "
+          f"(진입까지 {HOLD_NEAR}% 이내, 가까운 순)", flush=True)
 
     ranked, non_bio = [], 0
     for r in all_ranked:
@@ -201,6 +227,7 @@ def main():
          f"필터: 유동성 {VF.STATS['liquidity']}/{VF.STATS['total']} · "
          f"도지 {VF.STATS['doji']} · 저항선 {VF.STATS['peaks']} · "
          f"손절폭 {VF.STATS['stopwidth']}",
+         diag_text(),
          "",
          "진입=저항 돌파시 / 익절=1R 절반정리 후 손절을 진입가로", ""]
 
