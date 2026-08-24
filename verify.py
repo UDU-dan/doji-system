@@ -38,7 +38,7 @@ MIN_GAP = 20         # 봉우리 간 최소 간격(거래일)
 LOOKBACK = 1250      # 저항선 탐색 기간 (약 5년)
 
 # ══════ 패턴 1. 삼봉언덕 (교본: 세 고점이 대략 수평) ══════
-FLAT_PCT = 3.0       # 세 고점의 최대 편차 % (수평 판정)
+FLAT_PCT = 5.0       # 세 고점의 최대 편차 % (수평 판정)
 
 # ══════ 패턴 2. 가운데자리 (교본: 호가 1~2칸, 0.1~0.2%) ══════
 CLUSTER_PCT = 0.2    # 교본: 호가 1~2칸 (0.1~0.2%)
@@ -47,8 +47,12 @@ CLUSTER_PCT = 0.2    # 교본: 호가 1~2칸 (0.1~0.2%)
 UPPER_CHECK = 15.0   # 저항선 위 이 % 이내에 더 높은 고점 있으면 제외
 MA240_FILTER = True  # 현재가가 240일선 위인 종목만
 RISE_MIN = 2.0       # 고점상승: 직전 고점보다 이 % 이상 높아야
+
+# ══════ 패턴 3. 양양음 / 패턴 4. 또로록 ══════
+MA5_LEN = 5          # 5주기 이평 (교본: 일봉=5일)
+TORO_UP_MIN = 3.0    # 또로록: 조정 전 상승폭이 이 % 이상이어야 "상승하던" 것으로 인정
 MIN_TOUCH = 2        # 최소 터치 횟수
-RES_NEAR = 3.0       # 현재가가 저항선 이 % 아래일 때만 후보
+RES_NEAR = 5.0       # 현재가가 저항선 이 % 아래일 때만 후보
 RES_STOP_BUF = 2.5   # 저항선 돌파형 손절: 저항선 아래 이 %
 STOP_MIN = 2.0       # 손절폭 하한 % (교본: 2~3%)
 STOP_MAX = 3.0       # 손절폭 상한 %
@@ -57,6 +61,63 @@ RR_MIN = 1.5         # 손익비 하한 (교본: +5% / 손절폭 >= 1.5)
 
 
 BODY_MAX = 5.0       # 도지 몸통 최대 비율 %
+
+
+def yang_yang_eum(A, ma5v, i):
+    """
+    패턴 3. 양양음 (교본 4조건 전부 충족)
+      1) 음봉 뒤 양봉 2개 연속
+      2) 둘째 양봉이 5주기 이평 상향 돌파
+      3) 뒤따르는 음봉의 저점이 5선 아래로 이탈하지 않음
+      4) 그 음봉의 고점이 둘째 양봉 고점을 넘지 않음
+    반환: 저항선(둘째 양봉 고가) 또는 None
+    """
+    if i < 4:
+        return None
+    e0, y1, y2, cur = i - 3, i - 2, i - 1, i          # 음 양 양 음
+    O, H, L, C = 0, 1, 2, 3
+    if not (A[e0, C] < A[e0, O]):                     # 1) 첫 봉 음봉
+        return None
+    if not (A[y1, C] > A[y1, O] and A[y2, C] > A[y2, O]):   # 양봉 2개
+        return None
+    m2 = ma5v[y2]
+    if not np.isfinite(m2):
+        return None
+    if not (A[y2, C] > m2 and A[y1, C] <= ma5v[y1]):  # 2) 둘째가 5선 상향 돌파
+        return None
+    if not (A[cur, C] < A[cur, O]):                   # 마지막 봉 음봉
+        return None
+    mc = ma5v[cur]
+    if not np.isfinite(mc) or A[cur, L] < mc:         # 3) 5선 이탈 금지
+        return None
+    if A[cur, H] > A[y2, H]:                          # 4) 둘째 양봉 고점 안 넘음
+        return None
+    return float(A[y2, H])
+
+
+def ttororok(A, i):
+    """
+    패턴 4. 또로록 (흑삼병)
+      상승하던 주가가 음봉 3개로 조정 -> 조정 시작 전 고점이 저항선
+    반환: (저항선, 고점인덱스) 또는 None
+    """
+    if i < 8:
+        return None
+    O, H, L, C = 0, 1, 2, 3
+    for k in (i, i - 1, i - 2):                       # 최근 3봉이 모두 음봉
+        if A[k, C] >= A[k, O]:
+            return None
+    if not (A[i, C] < A[i - 1, C] < A[i - 2, C]):     # 계단식 하락
+        return None
+    start = i - 3                                     # 조정 직전 봉
+    hi_i, hi_v = start, A[start, H]
+    for k in range(max(0, start - 4), start + 1):     # 직전 고점 탐색
+        if A[k, H] > hi_v:
+            hi_i, hi_v = k, A[k, H]
+    lo_before = A[max(0, hi_i - 5):hi_i + 1, L].min()
+    if lo_before <= 0 or (hi_v / lo_before - 1) * 100 < TORO_UP_MIN:
+        return None                                   # "상승하던" 조건 미충족
+    return float(hi_v), hi_i
 
 
 def doji_kind(body_r, up_r, dn_r, rng_atr=1.0):
@@ -223,6 +284,7 @@ def analyze(df, code, name, market, days, marcap=None):
     atr = tr.rolling(14).mean()
     ma20 = c.rolling(20).mean()
     ma240 = c.rolling(240).mean()
+    ma5 = c.rolling(MA5_LEN).mean()
     vol20 = v.rolling(20).mean()
     val20 = (c * v).rolling(20).mean()
     rngs = (h - l).replace(0, np.nan)
@@ -271,6 +333,23 @@ def analyze(df, code, name, market, days, marcap=None):
                 STATS["doji"] += 1
                 cands.append((f"도지({k})", H, "도지",
                               f"{str(d.index[i])[5:10]} 고가 {int(round(H)):,}", 0))
+
+        # ③ 양양음
+        m5 = ma5.values
+        yy = yang_yang_eum(A, m5, i)
+        if yy:
+            STATS["yye"] = STATS.get("yye", 0) + 1
+            cands.append(("양양음", yy, "양양음",
+                          f"{str(d.index[i-1])[5:10]} 양봉고가 {int(round(yy)):,}", 0))
+
+        # ④ 또로록
+        tt = ttororok(A, i)
+        if tt:
+            lvl, hidx = tt
+            STATS["toro"] = STATS.get("toro", 0) + 1
+            cands.append(("또로록", lvl, "또로록",
+                          f"{str(d.index[hidx])[:10]} 조정전고점 {int(round(lvl)):,}",
+                          i - hidx))
 
         # ② 삼봉 / ③ 다중저항
         pk = swing_highs(HI, i, LO)
