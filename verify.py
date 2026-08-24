@@ -64,7 +64,8 @@ CPX_WINDOW = 120     # 복잡 구간 판정 기간
 CPX_CROSS_MIN = 6    # 이 기간 중 이평 교차 횟수가 이 이상이면 "복잡"
 
 # ══════ 패턴 7. 상승시그널 (반전 양봉) ══════
-SIG_FALL_MIN = 20.0  # 반전 캔들 전 하락폭이 이 % 이상이어야 "충분한 하락"
+SIG_FALL_MIN = 35.0  # 반전 캔들 전 하락폭이 이 % 이상이어야 "충분한 하락"
+SIG_ALLOW_PIERCING = False  # 피어싱 허용 여부 (교본: 강도 최하 -> 기본 제외)
 SIG_LOOKBACK = 120   # 하락 판정 기간
 MIN_TOUCH = 2        # 최소 터치 횟수
 RES_NEAR = 5.0       # 현재가가 저항선 이 % 아래일 때만 후보
@@ -225,7 +226,7 @@ def reversal_signal(A, i):
         kind = None
         if A[cur, O] < A[prev, C] and A[cur, C] > A[prev, O]:
             kind = "파이프바텀" if (A[cur, C] - A[cur, O]) > pbody * 1.5 else "인걸핑"
-        elif A[cur, C] >= A[prev, C] + pbody * 0.5:
+        elif SIG_ALLOW_PIERCING and A[cur, C] >= A[prev, C] + pbody * 0.5:
             kind = "피어싱"
         if not kind:
             continue
