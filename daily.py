@@ -92,7 +92,9 @@ def diag_text():
          f"  가운데자리 동일가쌍 {P['mid_pair']} · 위쪽벽 {P['mid_wall_fail']}"
          f" · 거리 {P['mid_near_fail']} → 성공 {P['mid_ok']}",
          f"  고점상승  성공 {P['rise_ok']}",
-         f"  양양음 {VF.STATS.get('yye', 0)} · 또로록 {VF.STATS.get('toro', 0)}"]
+         f"  양양음 {VF.STATS.get('yye', 0)} · 또로록 {VF.STATS.get('toro', 0)}"
+         f" · 빵빵빵 {VF.STATS.get('bbb', 0)} · 복합조정 {VF.STATS.get('cpx', 0)}"
+         f" · 상승시그널 {VF.STATS.get('sig', 0)}"]
     return "\n".join(L)
 
 
