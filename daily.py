@@ -175,6 +175,7 @@ def main():
             f.write(msg)
         return
 
+    wait = wait[(wait["entry"] / wait["last"] - 1) * 100 <= HOLD_NEAR]
     all_ranked = VF.merge_and_score(wait, mk)
     bio_set = bio_codes_kr() if mk == "kr" else set()
     for r in all_ranked:
