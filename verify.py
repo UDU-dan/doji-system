@@ -49,9 +49,11 @@ MA240_FILTER = True  # 현재가가 240일선 위인 종목만
 RISE_MIN = 2.0       # 고점상승: 직전 고점보다 이 % 이상 높아야
 MIN_TOUCH = 2        # 최소 터치 횟수
 RES_NEAR = 3.0       # 현재가가 저항선 이 % 아래일 때만 후보
-RES_STOP_BUF = 1.5   # 저항선 돌파형 손절: 저항선 아래 이 %
-STOP_MIN = 1.0       # 손절폭 하한 %
+RES_STOP_BUF = 2.5   # 저항선 돌파형 손절: 저항선 아래 이 %
+STOP_MIN = 2.0       # 손절폭 하한 % (교본: 2~3%)
 STOP_MAX = 3.0       # 손절폭 상한 %
+TARGET_PCT = 5.0     # 1차 익절 목표 % (교본: +5%)
+RR_MIN = 1.5         # 손익비 하한 (교본: +5% / 손절폭 >= 1.5)
 
 
 BODY_MAX = 5.0       # 도지 몸통 최대 비율 %
@@ -301,6 +303,8 @@ def analyze(df, code, name, market, days, marcap=None):
             sp = risk / entry * 100
             if sp <= 0 or sp > STOP_MAX:
                 continue
+            if TARGET_PCT / sp < RR_MIN:        # 손익비 미달이면 진입 보류
+                continue
             STATS["stopwidth"] += 1
 
             status, brk_day, res = "대기", None, ""
@@ -337,7 +341,7 @@ def analyze(df, code, name, market, days, marcap=None):
                 pattern=pname, ptype=ptype,
                 close=px(C), entry=px(entry), stop1=px(stop1), stop2=px(stop2),
                 points=pts, age_days=int(age_d),
-                tgt=px(entry + risk), stop_pct=round(sp, 2),
+                tgt=px(entry * (1 + TARGET_PCT / 100)), stop_pct=round(sp, 2),
                 vol_ratio=round(vr, 2),
                 value=(int(val20.iloc[i] / 1e8) if market == "kr"
                        else round(val20.iloc[i] / 1e6, 1)),
