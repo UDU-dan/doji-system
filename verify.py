@@ -38,7 +38,7 @@ MIN_GAP = 30         # 봉우리 간 최소 간격(거래일)
 LOOKBACK = 1250      # 저항선 탐색 기간 (약 5년)
 
 # ══════ 패턴 1. 삼봉언덕 (교본: 세 고점이 대략 수평) ══════
-FLAT_PCT = 5.0       # 세 고점의 최대 편차 % (수평 판정)
+FLAT_PCT = 12.0       # 세 고점의 최대 편차 % (수평 판정)
 
 # ══════ 패턴 2. 가운데자리 (교본: 호가 1~2칸, 0.1~0.2%) ══════
 CLUSTER_PCT = 0.2    # 교본: 호가 1~2칸 (0.1~0.2%)
@@ -69,7 +69,7 @@ SIG_ALLOW_PIERCING = False
 SIG_ALLOW_ENGULF = False    # 인걸핑 허용 (기본 제외, 파이프바텀만)  # 피어싱 허용 여부 (교본: 강도 최하 -> 기본 제외)
 SIG_LOOKBACK = 120   # 하락 판정 기간
 MIN_TOUCH = 2        # 최소 터치 횟수
-RES_NEAR = 5.0       # 현재가가 저항선 이 % 아래일 때만 후보
+RES_NEAR = 7.0       # 현재가가 저항선 이 % 아래일 때만 후보
 RES_STOP_BUF = 2.5   # 저항선 돌파형 손절: 저항선 아래 이 %
 STOP_MIN = 2.0       # 손절폭 하한 % (교본: 2~3%)
 STOP_MAX = 3.0       # 손절폭 상한 %
@@ -430,12 +430,12 @@ def analyze(df, code, name, market, days, marcap=None):
         if not np.isfinite(av) or not np.isfinite(m20) or not np.isfinite(val20.iloc[i]):
             continue
         STATS["total"] += 1
-        if MA240_FILTER:
-            m240 = ma240.iloc[i]
-            if not np.isfinite(m240) or C <= m240:
-                STATS["ma240_out"] = STATS.get("ma240_out", 0) + 1
-                continue
-            STATS["ma240_ok"] = STATS.get("ma240_ok", 0) + 1                       # 240일선 아래면 제외
+        m240 = ma240.iloc[i]
+        above240 = bool(np.isfinite(m240) and C > m240)
+        if above240:
+            STATS["ma240_ok"] = STATS.get("ma240_ok", 0) + 1
+        else:
+            STATS["ma240_out"] = STATS.get("ma240_out", 0) + 1                       # 240일선 아래면 제외
         if val20.iloc[i] < min_val or C < min_px:
             continue
         STATS["liquidity"] += 1
@@ -521,7 +521,10 @@ def analyze(df, code, name, market, days, marcap=None):
         pO, pC = A[i - 1, 0], A[i - 1, 3]
         body_top = max(pO, pC)
 
+        BOTTOM_PATS = ("빵빵빵", "상승시그널")
         for pname, lvl, ptype, pts, age_d in cands:
+            if MA240_FILTER and not above240 and ptype not in BOTTOM_PATS:
+                continue                       # 추세 패턴은 240일선 위에서만
             entry = lvl * 1.002
             if ptype == "도지":
                 base = body_top                          # 직전 캔들 몸통 위쪽
