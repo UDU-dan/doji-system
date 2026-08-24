@@ -23,7 +23,8 @@ import pandas as pd
 import scan as SC
 import verify as VF
 
-HOLD_NEAR = 5.0      # 보류 목록: 진입까지 이 % 이내인 종목만 표시
+HOLD_NEAR = 5.0      # 진입까지 이 % 이내인 종목만 감시·표시
+WATCH_MAX = 20       # 장중 감시 최대 종목 수
 
 BIO_WORDS = ("제약", "바이오", "생명과학", "파마", "메디", "테라퓨틱스",
              "헬스케어", "신약", "백신", "진단", "의약", "의료")
@@ -141,7 +142,6 @@ def main():
         return
 
     df = pd.DataFrame(rows)
-    df.to_csv(f"results/watchlist_{mk}.csv", index=False, encoding="utf-8-sig")
     wait = df[df["status"] == "대기"]
     hold = df[df["status"] == "보류"].copy()
     if len(hold):
@@ -161,6 +161,18 @@ def main():
         r["is_bio"] = (_norm(r["code"]) in bio_set) or is_bio(r["name"])
 
     # 비바이오 기준으로 top개를 확보하되, 그 사이에 낀 바이오는 표시만 하고 유지
+    # ── 감시용 CSV: 대기/보류 중 현재가 기준으로 아직 유효한 것만 ──
+    live = df[df["status"].isin(["대기", "보류"])].copy()
+    if len(live):
+        gap = (live["entry"] / live["last"] - 1) * 100
+        live = live[(gap >= 0) & (gap <= HOLD_NEAR)]
+    if len(live):
+        live = live.sort_values("stop_pct").drop_duplicates("code")
+        live = live.head(WATCH_MAX)
+    live.to_csv(f"results/watchlist_{mk}.csv", index=False, encoding="utf-8-sig")
+    print(f"      감시 대상 {len(live)}종목 저장 "
+          f"(진입까지 {HOLD_NEAR}% 이내)", flush=True)
+
     ranked, non_bio = [], 0
     for r in all_ranked:
         ranked.append(r)
