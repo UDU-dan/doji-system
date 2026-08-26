@@ -81,6 +81,9 @@ VOL_MULT_MIN = 1.5      # 교본: 국장은 20봉 평균 2배 이상
 MARCAP_MIN = 600_000_000_000   # 시총 6천억
 USE_VOL_FILTER = True
 USE_MARCAP_FILTER = True
+CLOSE_BREAK = True      # 교본: 종가로 저항 돌파해야 유효 (꼬리 돌파 = 가짜)
+USE_ALIGN = True        # 프레임 정렬(주봉) 확인
+ALIGN_MIN = "B"         # A=주봉도 돌파임박 / B=중립 / C=주봉 저항에 눌림(제외)
 
 # ══════ 점수 가중치 (백테스트 전략 평균 기준) ══════
 PAT_SCORE = {
@@ -412,6 +415,28 @@ PAT_STATS = dict(
 )
 
 
+def frame_align(df, i, level):
+    """
+    주봉 관점에서 이 저항선의 등급을 판정.
+      A : 주봉 고점도 이 근처 -> 큰 매물벽이 함께 뚫림
+      B : 주봉상 위쪽이 비어 있음 (중립)
+      C : 주봉 저항이 바로 위에 버티고 있음 -> 진입 금지
+    """
+    sub = df.iloc[max(0, i - 250):i + 1]
+    if len(sub) < 30:
+        return "B"
+    wk = sub.resample("W").agg({"High": "max", "Low": "min", "Close": "last"})
+    wk = wk.dropna()
+    if len(wk) < 10:
+        return "B"
+    hi = wk["High"].values
+    up = [x for x in hi if level * 1.002 < x <= level * 1.15]
+    if up:
+        return "C"                                   # 주봉 저항이 바로 위
+    near = [x for x in hi if abs(x - level) / level <= 0.03]
+    return "A" if near else "B"
+
+
 def analyze(df, code, name, market, days, marcap=None):
     if df is None or len(df) < 150:
         return []
@@ -569,6 +594,10 @@ def analyze(df, code, name, market, days, marcap=None):
             sp = risk / entry * 100
             if sp <= 0 or sp > STOP_MAX:
                 continue
+            grade = frame_align(d, i, lvl) if USE_ALIGN else "B"
+            STATS[f"align_{grade}"] = STATS.get(f"align_{grade}", 0) + 1
+            if USE_ALIGN and grade == "C":
+                continue                              # 상위 프레임 저항에 눌림
             if TARGET_PCT / sp < RR_MIN:        # 손익비 미달이면 진입 보류
                 continue
             STATS["stopwidth"] += 1
@@ -580,7 +609,8 @@ def analyze(df, code, name, market, days, marcap=None):
 
             below = False
             for j in range(i + 1, n):
-                if A[j, 1] >= entry:                 # 장중 돌파
+                brk_ok = (A[j, 3] >= entry) if CLOSE_BREAK else (A[j, 1] >= entry)
+                if brk_ok:                           # 돌파 (교본: 종가 기준)
                     status, brk_day = "돌파", j - i
                     mx = float(A[j:n, 1].max())
                     d0_hi = (A[j, 1] / entry - 1) * 100
@@ -640,7 +670,7 @@ def analyze(df, code, name, market, days, marcap=None):
                 code=code, name=name, date=str(d.index[i])[:10], dback=back,
                 pattern=pname, ptype=ptype,
                 close=px(C), entry=px(entry), stop1=px(stop1), stop2=px(stop2),
-                points=pts, age_days=int(age_d),
+                points=pts, age_days=int(age_d), grade=grade,
                 tgt=px(entry * (1 + TARGET_PCT / 100)), stop_pct=round(sp, 2),
                 vol_ratio=round(vr, 2),
                 value=(int(val20.iloc[i] / 1e8) if market == "kr"
