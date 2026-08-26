@@ -77,7 +77,7 @@ PAT_ON = {
 }
 
 # ══════ 교본 필터 ══════
-VOL_MULT_MIN = 2.0      # 교본: 국장은 20봉 평균 2배 이상
+VOL_MULT_MIN = 1.5      # 교본: 국장은 20봉 평균 2배 이상
 MARCAP_MIN = 600_000_000_000   # 시총 6천억
 USE_VOL_FILTER = True
 USE_MARCAP_FILTER = True
@@ -97,7 +97,7 @@ STOP_MIN = 2.0       # 손절폭 하한 % (교본: 2~3%)
 STOP_MAX = 3.0       # 손절폭 상한 %
 TARGET1_PCT = 5.0    # 1차 목표
 TARGET2_PCT = 2.0    # 당일 1차 미달시 절반 익절 기준
-HOLD_DAYS = 1        # 최대 보유 거래일
+HOLD_DAYS = 3        # 최대 보유 거래일
 TARGET_PCT = 5.0     # 1차 익절 목표 % (교본: +5%)
 RR_MIN = 1.5         # 손익비 하한 (교본: +5% / 손절폭 >= 1.5)
 
