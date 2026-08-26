@@ -66,6 +66,28 @@ CPX_CROSS_MIN = 6    # 이 기간 중 이평 교차 횟수가 이 이상이면 "
 # ══════ 패턴 7. 상승시그널 (반전 양봉) ══════
 SIG_FALL_MIN = 55.0  # 반전 캔들 전 하락폭이 이 % 이상이어야 "충분한 하락"
 SIG_ALLOW_PIERCING = False
+
+# ══════ 패턴 on/off (교본 7패턴 = True, 그 외 = 선택) ══════
+PAT_ON = {
+    "삼봉": True, "다중저항": True, "양양음": True, "또로록": True,
+    "빵빵빵": True, "복합조정": True,
+    "상승시그널": False,   # 성과 최하위 (승률 49% · +0.34%)
+    "고점상승": True,      # 교본에 없음
+    "도지": True,          # 교본에 없음
+}
+
+# ══════ 교본 필터 ══════
+VOL_MULT_MIN = 2.0      # 교본: 국장은 20봉 평균 2배 이상
+MARCAP_MIN = 600_000_000_000   # 시총 6천억
+USE_VOL_FILTER = True
+USE_MARCAP_FILTER = True
+
+# ══════ 점수 가중치 (백테스트 전략 평균 기준) ══════
+PAT_SCORE = {
+    "다중저항": 100, "삼봉": 87, "복합조정": 85, "양양음": 67,
+    "도지": 62, "또로록": 54, "고점상승": 54, "빵빵빵": 39,
+    "상승시그널": 12,
+}
 SIG_ALLOW_ENGULF = False    # 인걸핑 허용 (기본 제외, 파이프바텀만)  # 피어싱 허용 여부 (교본: 강도 최하 -> 기본 제외)
 SIG_LOOKBACK = 120   # 하락 판정 기간
 MIN_TOUCH = 2        # 최소 터치 횟수
@@ -440,6 +462,8 @@ def analyze(df, code, name, market, days, marcap=None):
             STATS["ma240_ok"] = STATS.get("ma240_ok", 0) + 1
         else:
             STATS["ma240_out"] = STATS.get("ma240_out", 0) + 1                       # 240일선 아래면 제외
+        if USE_MARCAP_FILTER and marcap and marcap < MARCAP_MIN:
+            continue
         if val20.iloc[i] < min_val or C < min_px:
             continue
         STATS["liquidity"] += 1
@@ -500,7 +524,7 @@ def analyze(df, code, name, market, days, marcap=None):
                           i - hidx))
 
         # ⑦ 상승시그널
-        rs = reversal_signal(A, i)
+        rs = reversal_signal(A, i) if PAT_ON.get("상승시그널", True) else None
         if rs and near_ok(rs[0]):
             lvl, kind, cidx = rs
             STATS["sig"] = STATS.get("sig", 0) + 1
@@ -525,6 +549,9 @@ def analyze(df, code, name, market, days, marcap=None):
         pO, pC = A[i - 1, 0], A[i - 1, 3]
         body_top = max(pO, pC)
 
+        if USE_VOL_FILTER and vr < VOL_MULT_MIN:
+            cands = []
+        cands = [c for c in cands if PAT_ON.get(c[2], True)]
         BOTTOM_PATS = ("빵빵빵", "상승시그널")
         for pname, lvl, ptype, pts, age_d in cands:
             if MA240_FILTER and not above240 and ptype not in BOTTOM_PATS:
@@ -686,8 +713,9 @@ def merge_and_score(wait, mk):
         base = 1e9 if mk == "kr" else 3e7
         sc_liq = float(np.clip(np.log10(max(r["value"] * (1e8 if mk == "kr" else 1e6), 1)
                                         / base) / 1.5, 0, 1) * 100)
-        score = (sc_pat * 25 + sc_touch * 15 + sc_stop * 25 +
-                 sc_near * 25 + sc_liq * 10) / 100
+        sc_quality = max(PAT_SCORE.get(p.split("(")[0], 50) for p in pats)
+        score = (sc_pat * 15 + sc_touch * 10 + sc_stop * 20 +
+                 sc_near * 20 + sc_liq * 5 + sc_quality * 30) / 100
 
         r["pattern"] = " + ".join(pats)
         r["points"] = pts[:5]
