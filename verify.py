@@ -64,7 +64,7 @@ CPX_WINDOW = 120     # 복잡 구간 판정 기간
 CPX_CROSS_MIN = 6    # 이 기간 중 이평 교차 횟수가 이 이상이면 "복잡"
 
 # ══════ 패턴 7. 상승시그널 (반전 양봉) ══════
-SIG_FALL_MIN = 40.0  # 반전 캔들 전 하락폭이 이 % 이상이어야 "충분한 하락"
+SIG_FALL_MIN = 55.0  # 반전 캔들 전 하락폭이 이 % 이상이어야 "충분한 하락"
 SIG_ALLOW_PIERCING = False
 SIG_ALLOW_ENGULF = False    # 인걸핑 허용 (기본 제외, 파이프바텀만)  # 피어싱 허용 여부 (교본: 강도 최하 -> 기본 제외)
 SIG_LOOKBACK = 120   # 하락 판정 기간
@@ -75,7 +75,7 @@ STOP_MIN = 2.0       # 손절폭 하한 % (교본: 2~3%)
 STOP_MAX = 3.0       # 손절폭 상한 %
 TARGET1_PCT = 5.0    # 1차 목표
 TARGET2_PCT = 2.0    # 당일 1차 미달시 절반 익절 기준
-HOLD_DAYS = 3        # 최대 보유 거래일
+HOLD_DAYS = 1        # 최대 보유 거래일
 TARGET_PCT = 5.0     # 1차 익절 목표 % (교본: +5%)
 RR_MIN = 1.5         # 손익비 하한 (교본: +5% / 손절폭 >= 1.5)
 
@@ -212,7 +212,7 @@ def reversal_signal(A, i):
     """
     O, H, L, C = 0, 1, 2, 3
     for j in range(i - 1, max(0, i - 40), -1):        # 최근 40봉 내 반전 캔들 탐색
-        if j < SIG_LOOKBACK + 1:
+        if j < _LOOKBACK + 1:
             break
         prev, cur = j - 1, j
         if not (A[prev, C] < A[prev, O] and A[cur, C] > A[cur, O]):
@@ -221,7 +221,7 @@ def reversal_signal(A, i):
         if pbody <= 0:
             continue
         # 충분한 하락 전제
-        win = A[max(0, cur - SIG_LOOKBACK):cur, H]
+        win = A[max(0, cur - _LOOKBACK):cur, H]
         if len(win) == 0:
             continue
         peak = win.max()
