@@ -612,6 +612,14 @@ def analyze(df, code, name, market, days, marcap=None):
                 brk_ok = (A[j, 3] >= entry) if CLOSE_BREAK else (A[j, 1] >= entry)
                 if brk_ok:                           # 돌파 (교본: 종가 기준)
                     status, brk_day = "돌파", j - i
+                    if CLOSE_BREAK:
+                        # 실제 매수는 돌파 확정일 종가. 손절도 그 기준으로 재계산
+                        entry = float(A[j, 3])
+                        risk = entry - stop1
+                        if risk <= 0:
+                            status, brk_day = "대기", None
+                            continue
+                        sp = risk / entry * 100
                     mx = float(A[j:n, 1].max())
                     d0_hi = (A[j, 1] / entry - 1) * 100
                     d0_cl = (A[j, 3] / entry - 1) * 100
@@ -815,7 +823,11 @@ def report(df, mk, days):
         L.append("")
         L.append("━━ 전체 돌파분 상세 ━━")
         L.append(f"  당일 최고 평균 {h0.mean():+.2f}% · 중앙 {h0.median():+.2f}%")
-        L.append(f"  당일 종가 평균 {c0.mean():+.2f}% · 중앙 {c0.median():+.2f}%")
+        if CLOSE_BREAK:
+            L.append("  ※ 종가돌파 모드: 진입가 = 돌파일 종가이므로 "
+                     "당일 지표는 0. D+1 이후를 보세요")
+        else:
+            L.append(f"  당일 종가 평균 {c0.mean():+.2f}% · 중앙 {c0.median():+.2f}%")
         L.append(f"  당일 종가가 진입가 위: {(c0>0).sum()}/{len(c0)}건 "
                  f"({(c0>0).mean()*100:.0f}%)")
         L.append("  당일 도달률: " + " · ".join(
