@@ -563,9 +563,10 @@ def analyze(df, code, name, market, days, marcap=None):
                     # 당일 +5% 도달시 절반, 아니면 +2%에 절반. 나머지는 3일내 청산
                     end = min(j + HOLD_DAYS, n - 1)
                     half_px = None
-                    if A[j, 1] >= entry * (1 + TARGET1_PCT / 100):
+                    hi_all = A[j:end + 1, 1].max()
+                    if hi_all >= entry * (1 + TARGET1_PCT / 100):
                         half_px, half_tag = entry * (1 + TARGET1_PCT / 100), "5%"
-                    elif A[j, 1] >= entry * (1 + TARGET2_PCT / 100):
+                    elif hi_all >= entry * (1 + TARGET2_PCT / 100):
                         half_px, half_tag = entry * (1 + TARGET2_PCT / 100), "2%"
                     # 손절 여부 (종가 기준)
                     stopped = None
