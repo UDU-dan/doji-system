@@ -92,6 +92,8 @@ def diag_text():
          f"  가운데자리 동일가쌍 {P['mid_pair']} · 위쪽벽 {P['mid_wall_fail']}"
          f" · 거리 {P['mid_near_fail']} → 성공 {P['mid_ok']}",
          f"  고점상승  성공 {P['rise_ok']}",
+         f"  프레임정렬 A {VF.STATS.get('align_A',0)} · B {VF.STATS.get('align_B',0)}"
+         f" · C(제외) {VF.STATS.get('align_C',0)}",
          f"  240일선 통과 {VF.STATS.get('ma240_ok',0)} / 탈락 "
          f"{VF.STATS.get('ma240_out',0)}",
          f"  양양음 {VF.STATS.get('yye', 0)} · 또로록 {VF.STATS.get('toro', 0)}"
