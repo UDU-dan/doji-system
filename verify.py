@@ -73,6 +73,9 @@ RES_NEAR = 7.0       # 현재가가 저항선 이 % 아래일 때만 후보
 RES_STOP_BUF = 2.5   # 저항선 돌파형 손절: 저항선 아래 이 %
 STOP_MIN = 2.0       # 손절폭 하한 % (교본: 2~3%)
 STOP_MAX = 3.0       # 손절폭 상한 %
+TARGET1_PCT = 5.0    # 1차 목표
+TARGET2_PCT = 2.0    # 당일 1차 미달시 절반 익절 기준
+HOLD_DAYS = 3        # 최대 보유 거래일
 TARGET_PCT = 5.0     # 1차 익절 목표 % (교본: +5%)
 RR_MIN = 1.5         # 손익비 하한 (교본: +5% / 손절폭 >= 1.5)
 
@@ -544,6 +547,7 @@ def analyze(df, code, name, market, days, marcap=None):
 
             status, brk_day, res = "대기", None, ""
             d0_hi = d0_cl = d1_hi = mx = None
+            strat = None; strat_tag = None; dcl = [None]*4
             stop2 = L - max(av * 0.15, entry * 0.001)
 
             below = False
@@ -555,6 +559,38 @@ def analyze(df, code, name, market, days, marcap=None):
                     d0_cl = (A[j, 3] / entry - 1) * 100
                     d1_hi = ((max(A[j, 1], A[j + 1, 1]) / entry - 1) * 100
                              if j + 1 < n else d0_hi)
+                    # ── 전략 시뮬레이션 ──
+                    # 당일 +5% 도달시 절반, 아니면 +2%에 절반. 나머지는 3일내 청산
+                    end = min(j + HOLD_DAYS, n - 1)
+                    half_px = None
+                    if A[j, 1] >= entry * (1 + TARGET1_PCT / 100):
+                        half_px, half_tag = entry * (1 + TARGET1_PCT / 100), "5%"
+                    elif A[j, 1] >= entry * (1 + TARGET2_PCT / 100):
+                        half_px, half_tag = entry * (1 + TARGET2_PCT / 100), "2%"
+                    # 손절 여부 (종가 기준)
+                    stopped = None
+                    for k3 in range(j, end + 1):
+                        if A[k3, 3] <= stop1:
+                            stopped = k3
+                            break
+                    if half_px is None:
+                        # 절반도 못 먹음 -> 전량 손절 또는 3일차 종가
+                        exit_px = A[stopped, 3] if stopped is not None else A[end, 3]
+                        strat = (exit_px / entry - 1) * 100
+                        strat_tag = "손절" if stopped is not None else "3일청산"
+                    else:
+                        rest_px = (stop1 if stopped is not None else A[end, 3])
+                        strat = ((half_px / entry - 1) * 100 * 0.5
+                                 + (rest_px / entry - 1) * 100 * 0.5)
+                        strat_tag = half_tag + ("+손절" if stopped is not None
+                                                else "+3일청산")
+                    # D+1 ~ D+3 종가 수익률
+                    dcl = []
+                    for off in (0, 1, 2, 3):
+                        k4 = j + off
+                        dcl.append(round((A[k4, 3] / entry - 1) * 100, 2)
+                                   if k4 < n else None)
+
                     res = "보유중"
                     for k2 in range(j, n):
                         if A[k2, 1] >= entry + risk:
@@ -584,6 +620,12 @@ def analyze(df, code, name, market, days, marcap=None):
                 d0_hi=(round(d0_hi, 2) if d0_hi is not None else None),
                 d0_cl=(round(d0_cl, 2) if d0_cl is not None else None),
                 d1_hi=(round(d1_hi, 2) if d1_hi is not None else None),
+                strat=(round(strat, 2) if status == "돌파" else None),
+                strat_tag=(strat_tag if status == "돌파" else None),
+                d0c=(dcl[0] if status == "돌파" else None),
+                d1c=(dcl[1] if status == "돌파" else None),
+                d2c=(dcl[2] if status == "돌파" else None),
+                d3c=(dcl[3] if status == "돌파" else None),
                 gain=(round((mx / entry - 1) * 100, 2) if mx else None),
                 last=px(A[-1, 3]),
             ))
@@ -731,6 +773,47 @@ def report(df, mk, days):
             ok = (hh >= sub.loc[hh.index, "stop_pct"]).mean() * 100
             L.append(f"    ~{cap:.1f}%  {len(sub):3d}건 · 당일 1R달성 {ok:3.0f}% · "
                      f"당일최고 평균 {hh.mean():+.2f}%")
+
+        st = brk["strat"].dropna()
+        if len(st):
+            L.append("")
+            L.append(f"━━ 전략 성과 (당일 +{TARGET1_PCT:.0f}% or +{TARGET2_PCT:.0f}% "
+                     f"절반익절 · 최대 {HOLD_DAYS}일 보유) ━━")
+            L.append(f"  평균 {st.mean():+.2f}% · 중앙 {st.median():+.2f}% · "
+                     f"승률 {(st > 0).mean() * 100:.0f}%")
+            win, los = st[st > 0], st[st <= 0]
+            if len(win) and len(los):
+                L.append(f"  평균이익 {win.mean():+.2f}% · 평균손실 {los.mean():+.2f}% · "
+                         f"손익비 {abs(win.mean() / los.mean()):.2f}")
+            tags = brk["strat_tag"].dropna().value_counts()
+            L.append("  청산유형: " + " · ".join(f"{k} {v}" for k, v in tags.items()))
+            for col, lb in (("d0c", "당일"), ("d1c", "D+1"),
+                            ("d2c", "D+2"), ("d3c", "D+3")):
+                x = brk[col].dropna()
+                if len(x):
+                    L.append(f"  {lb} 종가 평균 {x.mean():+.2f}% · "
+                             f"플러스 {(x > 0).mean() * 100:.0f}%")
+            L.append("")
+            L.append("  패턴별 전략 성과")
+            for pt, g in brk.groupby("ptype"):
+                gs = g["strat"].dropna()
+                if len(gs) < 5:
+                    continue
+                L.append(f"    {pt:<10} {len(gs):>4}건 · 평균 {gs.mean():+.2f}% · "
+                         f"승률 {(gs > 0).mean() * 100:.0f}%")
+
+        L.append("")
+        L.append("━━ 패턴별 샘플 (차트 대조용) ━━")
+        for pt, g in brk.groupby("ptype"):
+            gg = g.sort_values("strat", ascending=False)
+            for _, r in gg.head(2).iterrows():
+                L.append(f"\n[{r['pattern']}] {r['name'][:14]} {r['date']}")
+                for p in str(r["points"]).split(" / "):
+                    L.append(f"    · {p}")
+                L.append(f"    진입 {r['entry']:,} · 손절 {r['stop1']:,} "
+                         f"({r['stop_pct']}%)")
+                L.append(f"    당일최고 {r['d0_hi']:+.2f}% / 종가 {r['d0_cl']:+.2f}% "
+                         f"→ 전략 {r['strat']:+.2f}% ({r['strat_tag']})")
 
         L.append("")
         L.append("━━ 월별 ━━")
