@@ -212,7 +212,7 @@ def reversal_signal(A, i):
     """
     O, H, L, C = 0, 1, 2, 3
     for j in range(i - 1, max(0, i - 40), -1):        # 최근 40봉 내 반전 캔들 탐색
-        if j < _LOOKBACK + 1:
+        if j < SIG_LOOKBACK + 1:
             break
         prev, cur = j - 1, j
         if not (A[prev, C] < A[prev, O] and A[cur, C] > A[cur, O]):
@@ -221,7 +221,7 @@ def reversal_signal(A, i):
         if pbody <= 0:
             continue
         # 충분한 하락 전제
-        win = A[max(0, cur - _LOOKBACK):cur, H]
+        win = A[max(0, cur - SIG_LOOKBACK):cur, H]
         if len(win) == 0:
             continue
         peak = win.max()
@@ -374,6 +374,7 @@ def find_resistances(peaks, price):
     return res
 
 
+ERRS = []
 STATS = dict(total=0, liquidity=0, doji=0, peaks=0, stopwidth=0, wait=0)
 PAT_STATS = dict(
     peak_cnt=[],        # 종목별 봉우리 개수 분포
@@ -563,7 +564,7 @@ def analyze(df, code, name, market, days, marcap=None):
                     # 당일 +5% 도달시 절반, 아니면 +2%에 절반. 나머지는 3일내 청산
                     end = min(j + HOLD_DAYS, n - 1)
                     half_px = None
-                    hi_all = A[j:end + 1, 1].max()
+                    hi_all = float(A[j:end + 1, 1].max())
                     if hi_all >= entry * (1 + TARGET1_PCT / 100):
                         half_px, half_tag = entry * (1 + TARGET1_PCT / 100), "5%"
                     elif hi_all >= entry * (1 + TARGET2_PCT / 100):
@@ -880,8 +881,8 @@ def main():
                     print(f"      {done}/{len(uni)}", flush=True)
                 try:
                     rows.extend(analyze(f.result(), c, n, mk, a.days, m))
-                except Exception:
-                    pass
+                except Exception as _ex:
+                    ERRS.append(str(_ex))
     else:
         meta = {c: n for c, n, _ in uni}
         syms = list(meta.keys())
@@ -889,12 +890,17 @@ def main():
             for t, dd in SC.fetch_us_batch(syms[k:k + 150], period="5y").items():
                 try:
                     rows.extend(analyze(dd, t, meta.get(t, t), mk, a.days))
-                except Exception:
-                    pass
+                except Exception as _ex:
+                    ERRS.append(str(_ex))
             print(f"      {min(k + 150, len(syms))}/{len(syms)}", flush=True)
 
     if not rows:
         print("후보 0건")
+        if ERRS:
+            from collections import Counter
+            print("  분석 오류 상위:")
+            for m, c in Counter(ERRS).most_common(3):
+                print(f"    {c}건  {m}")
         return
 
     df = pd.DataFrame(rows)
