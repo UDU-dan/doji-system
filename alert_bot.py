@@ -39,7 +39,8 @@ REST = "https://openapi.koreainvestment.com:9443"
 WS_KR = "ws://ops.koreainvestment.com:21000"
 TR_TRADE = "H0STCNT0"
 STORE = "manual_watch.json"
-BREAK_EXTRA = 0.5        # 돌파 후 이 % 더 오르면 한 번 더 알림
+BREAK_EXTRA = 0.5
+HOLD_NEAR_PCT = 5.0      # "지난거 해제": 지정가 대비 이 % 넘게 멀어지면 대상        # 돌파 후 이 % 더 오르면 한 번 더 알림
 POLL_US = 60             # 미장 폴링 주기(초)
 
 TOKEN = os.environ.get("ALERT_TOKEN", "")
@@ -319,8 +320,95 @@ def parse_cmd(text):
     return (None, None, None)
 
 
+def bulk_handle(text, store, market, pending):
+    """
+    여러 줄 입력, 다중 해제, 전체/조건부 해제를 먼저 처리한다.
+    처리했으면 응답 문자열을, 해당 없으면 None 을 반환해서
+    handle() 로 넘어가게 한다.
+    """
+    t = text.strip()
+    low = t.lower().replace(" ", "")
+
+    # ── 전체 해제 ──
+    if low in ("전체해제", "다해제", "모두해제", "전체삭제"):
+        allst = load_store()
+        cur = {k: v for k, v in allst.items() if v.get("market", "kr") == market}
+        if not cur:
+            return "해제할 종목이 없습니다."
+        for c in cur:
+            allst.pop(c, None)
+            store.pop(c, None)
+            LIVE.pop(c, None)
+        save_store(allst)
+        names = ", ".join(v["name"] for v in cur.values())
+        return f"전체 해제 완료 ({len(cur)}종목)\n{names}"
+
+    # ── 조건부 해제: 지난거 / 보류 / 이탈 ──
+    if low in ("지난거해제", "지난종목해제", "먼거해제"):
+        allst = load_store()
+        cur = {k: v for k, v in allst.items() if v.get("market", "kr") == market}
+        removed = []
+        for c, v in cur.items():
+            lp = v.get("last_px")
+            if lp and v["price"] > 0 and (lp / v["price"] - 1) * 100 <= -HOLD_NEAR_PCT:
+                allst.pop(c, None); store.pop(c, None); LIVE.pop(c, None)
+                removed.append(v["name"])
+        if not removed:
+            return f"지정가에서 {HOLD_NEAR_PCT}% 넘게 멀어진 종목이 없습니다."
+        save_store(allst)
+        return f"해제 완료 ({len(removed)}종목)\n" + ", ".join(removed)
+
+    if low in ("보류해제", "보류종목해제"):
+        allst = load_store()
+        cur = {k: v for k, v in allst.items() if v.get("market", "kr") == market}
+        removed = [v["name"] for c, v in cur.items() if v.get("state") == "보류"]
+        for c, v in list(cur.items()):
+            if v.get("state") == "보류":
+                allst.pop(c, None); store.pop(c, None); LIVE.pop(c, None)
+        if not removed:
+            return "보류 상태인 종목이 없습니다."
+        save_store(allst)
+        return f"해제 완료 ({len(removed)}종목)\n" + ", ".join(removed)
+
+    # ── 여러 줄 입력: 줄마다 등록 시도, 애매한 것만 확인 요청 ──
+    lines = [x for x in t.split("\n") if x.strip()]
+    if len(lines) > 1:
+        results = []
+        for ln in lines:
+            r = handle(ln, store, market, {})   # 각 줄은 독립 처리 (확인 불필요한 것만)
+            if r:
+                head = r.split("\n")[0]
+                results.append(f"· {ln.strip()} → {head}")
+        return "\n".join(results) if results else None
+
+    # ── 한 줄에 여러 종목 + 해제: "삼성전자 NAVER GS건설 해제" ──
+    if any(w in t for w in DEL_WORDS):
+        raw = t
+        for w in DEL_WORDS:
+            raw = raw.replace(w, " ")
+        names = [x for x in raw.split() if x and not re.fullmatch(r"[\d,.]+", x)]
+        if len(names) > 1:
+            allst = load_store()
+            removed = []
+            for nm in names:
+                for c, v in list(allst.items()):
+                    if c == nm or nm in v["name"] or nm.upper() == c.upper():
+                        allst.pop(c, None); store.pop(c, None); LIVE.pop(c, None)
+                        removed.append(v["name"])
+                        break
+            if removed:
+                save_store(allst)
+                return f"해제 완료 ({len(removed)}종목)\n" + ", ".join(removed)
+            return "목록에서 해당 종목을 찾지 못했습니다."
+
+    return None
+
+
 def handle(text, store, market, pending):
     """명령 처리 -> 응답 문자열"""
+    bulk = bulk_handle(text, store, market, pending)
+    if bulk is not None:
+        return bulk
     act, sym, price = parse_cmd(text)
 
     if act == "yes" and pending.get("cand"):
@@ -427,13 +515,21 @@ def handle(text, store, market, pending):
                 L.append(f"  {i}. {n} ({c}) · {'국장' if m == 'kr' else '미장'}")
             return "\n".join(L)
         code, name, mkt = found[0]
-        pending["cand"] = dict(code=code, name=name, price=price, market=mkt)
         allst = load_store()
-        old = allst.get(code)
-        pre = (f"현재 {fmt_price(old['price'], mkt)} → " if old else "")
-        lbl = "국장" if mkt == "kr" else "미장"
-        return (f"{name} ({code}) · {lbl}\n"
-                f"{pre}{fmt_price(price, mkt)} 등록할까요?\n네 / 아니오")
+        old = allst.get(code, {})
+        allst[code] = dict(
+            name=name, price=price, state="대기", notified=[], market=mkt,
+            added=old.get("added") or datetime.now(KST).strftime("%m/%d %H:%M"),
+            last_px=None, last_at=None, events=[])
+        save_store(allst)
+        if mkt == market:
+            store[code] = allst[code]
+            LIVE[code] = allst[code]
+            note = "감시 시작"
+        else:
+            note = ("국장 종목 - 다음 국장 세션부터 감시"
+                    if mkt == "kr" else "미장 종목 - 다음 미장 세션부터 감시")
+        return f"등록 완료\n{name} ({code}) {fmt_price(price, mkt)}\n{note}"
 
     if act == "query":
         found = find_stock(sym)
