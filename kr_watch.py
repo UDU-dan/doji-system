@@ -13,6 +13,7 @@ KIS 웹소켓 연결 하나로 두 종류를 함께 감시한다.
 환경변수: ALERT_TOKEN, ALERT_CHAT_ID, KIS_APP_KEY, KIS_APP_SECRET
 실행: python kr_watch.py
 """
+import argparse
 import json
 import os
 import signal
@@ -39,7 +40,9 @@ AUTO_CSV = "results/watchlist_kr.csv"
 RESET_PCT = 0.3          # 저항선 아래로 이 % 이상 빠져야 재알림 허용
 COOLDOWN_SEC = 900       # 같은 종목 재알림 최소 간격 (15분)
 MAX_REPEAT = 3           # 같은 종목 돌파 알림 하루 최대 횟수
-AUTO_ALERT = False       # 🔵 자동 선별 종목 알림 (검증 완료 전까지 끔)
+AUTO_ALERT = False
+MANUAL_T1 = 5.0      # ⭐ 지정 종목: 진입가 대비 이 %에서 절반 익절
+MANUAL_T2 = 10.0     # ⭐ 지정 종목: 진입가 대비 이 %에서 전량 익절       # 🔵 자동 선별 종목 알림 (검증 완료 전까지 끔)
 
 CLEANUP = {"ws": None, "approval": None, "codes": set()}
 
@@ -184,10 +187,16 @@ def judge(code, v, px):
     # 자동 선별 종목은 알림 없이 상태만 추적 (AUTO_ALERT=False)
     silent = (kind == "자동") and not AUTO_ALERT
 
-    # ── 손절선 이탈 : 상태만 갱신, 알림 없음 ──
+    # ── 손절선 이탈 ──
     if stop and px <= float(stop):
-        if v.get("state") != "이탈":
-            v["state"] = "이탈"
+        was_new = v.get("state") != "이탈"
+        v["state"] = "이탈"
+        if was_new and kind == "지정":
+            return (f"{icon} 🔻 손 절 🔻 {icon}\n"
+                    f"━━━━━━━━━━━━━━\n"
+                    f"{name} ({code}){pat}\n"
+                    f"현재 {f(px)} · 손절선 {f(float(stop))} 이탈\n"
+                    f"{ts}")
         return None
 
     if silent:
@@ -256,6 +265,23 @@ def judge(code, v, px):
                    f"현재 {f(px)} · 목표 {f(float(tgt))} 도달\n"
                    f"절반 정리 → 손절을 {f(target)}로\n"
                    f"{ts}")
+        elif kind == "지정" and not tgt:
+            t1 = target * (1 + MANUAL_T1 / 100)
+            t2 = target * (1 + MANUAL_T2 / 100)
+            if px >= t2 and "전량익절" not in notified:
+                notified.append("전량익절")
+                msg = (f"{icon} 💯 전량 익절 💯 {icon}\n"
+                       f"━━━━━━━━━━━━━━\n"
+                       f"{name} ({code})\n"
+                       f"진입 {f(target)} → 현재 {f(px)} (+{MANUAL_T2:.0f}% 도달)\n"
+                       f"전량 정리\n{ts}")
+            elif px >= t1 and "절반익절" not in notified:
+                notified.append("절반익절")
+                msg = (f"{icon} 💰 절반 익절 💰 {icon}\n"
+                       f"━━━━━━━━━━━━━━\n"
+                       f"{name} ({code})\n"
+                       f"진입 {f(target)} → 현재 {f(px)} (+{MANUAL_T1:.0f}% 도달)\n"
+                       f"절반 정리 → 손절을 진입가 {f(target)}로\n{ts}")
         elif (not tgt) and diff >= AB.BREAK_EXTRA and "돌파+" not in notified:
             notified.append("돌파+")
             msg = (f"{icon} 📈 추가상승\n"
@@ -332,6 +358,17 @@ def bot_loop(targets, stop_flag):
 
 # ══════════ 메인 ══════════
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--until", default="15:20",
+                    help="감시 종료 시각 HH:MM (기본 15:20)")
+    ap.add_argument("--skip-scan", action="store_true",
+                    help="사용 안 함 (워크플로 호환용)")
+    args = ap.parse_args()
+    try:
+        _h, _m = (int(x) for x in args.until.split(":"))
+    except Exception:
+        _h, _m = 15, 20
+
     key = os.environ.get("KIS_APP_KEY", "")
     secret = os.environ.get("KIS_APP_SECRET", "")
     if not key or not secret:
@@ -344,7 +381,7 @@ def main():
 
     today = now().date()
     open_at = datetime.combine(today, OPEN_T, KST)
-    close_at = datetime.combine(today, CLOSE_T, KST)
+    close_at = datetime.combine(today, dtime(_h, _m), KST)
     if now() >= close_at:
         tg("[국장 통합감시] 이미 장 마감 - 종료")
         return 0
@@ -353,7 +390,7 @@ def main():
     AB.us_list()
 
     tg(summary(targets, f"[국장 통합감시] {now():%m/%d %H:%M} KST\n"
-                        f"개장 09:00 · 마감 15:20")
+                        f"개장 09:00 · 이번 세션 {_h:02d}:{_m:02d} 까지")
        + ("\n\n※ 🔵 자동 종목은 현재 알림 없이 감시만 합니다 (현황으로 확인)"
           if not AUTO_ALERT else "")
        + "\n\n지정가 등록: 종목명 또는 코드 + 가격"
